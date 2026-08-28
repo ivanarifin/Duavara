@@ -4,6 +4,7 @@ import {
   MAX_RADIUS_METERS,
   OSM_ATTRIBUTION,
   OVERPASS_ENDPOINT,
+  OVERPASS_ENDPOINTS,
 } from '@/services/mosques';
 
 type MockResponse = {
@@ -65,12 +66,16 @@ describe('nearby mosque lookup', () => {
     expect(init.method).toBe('POST');
     expect(init.headers).toEqual({
       'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      'User-Agent': 'Duavara/1.0 (+https://github.com/ivanarifin/Duavara)',
     });
     const query = new URLSearchParams(String(init.body)).get('data');
     expect(query).toContain('[out:json][timeout:25]');
     expect(query).toContain('"religion"~"^(muslim|islam)$",i');
     expect(query).toContain('nwr["building"="mosque"]');
     expect(query).toContain('(around:5000,35.681236,139.767125)');
+    expect(OVERPASS_ENDPOINTS).toContain(
+      'https://overpass.private.coffee/api/interpreter',
+    );
   });
 
   test('rejects invalid coordinates and radii before fetching', async () => {

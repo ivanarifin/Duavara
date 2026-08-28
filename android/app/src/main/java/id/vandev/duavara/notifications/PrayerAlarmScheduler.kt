@@ -10,7 +10,6 @@ import android.os.Build
 
 internal object PrayerAlarmScheduler {
   fun schedule(context: Context, notification: StoredNotification) {
-    NotificationChannels.ensure(context)
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     val pendingIntent = pendingIntent(context, notification.id)
 
@@ -23,15 +22,19 @@ internal object PrayerAlarmScheduler {
         )
         return
       } catch (_: SecurityException) {
-        // Fall through to the permitted inexact alarm.
+        // Fall through to an inexact alarm when exact scheduling is revoked.
       }
     }
 
-    alarmManager.setAndAllowWhileIdle(
-      AlarmManager.RTC_WAKEUP,
-      notification.at,
-      pendingIntent,
-    )
+    try {
+      alarmManager.setAndAllowWhileIdle(
+        AlarmManager.RTC_WAKEUP,
+        notification.at,
+        pendingIntent,
+      )
+    } catch (_: Exception) {
+      alarmManager.set(AlarmManager.RTC_WAKEUP, notification.at, pendingIntent)
+    }
   }
 
   fun cancel(context: Context, id: String) {

@@ -1,5 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { captureLocalDataEpoch, withStorageLock } from '@/services/storageLock';
+import {
+  formatDecimalInput,
+  formatNumberWithSeparators,
+  parseUnsignedDecimal,
+} from '@/domain/number';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -78,10 +83,7 @@ function safeAmount(value: number): number {
 }
 
 function parseAmount(value: string): number {
-  const normalized = value.replace(/,/g, '').trim();
-  if (!normalized) return 0;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  return parseUnsignedDecimal(value) ?? 0;
 }
 
 export function calculateZakat(input: ZakatInput): ZakatResult {
@@ -138,7 +140,7 @@ function formFromUnknown(value: unknown): ZakatForm {
 }
 
 function formatAmount(value: number): string {
-  return value.toFixed(2);
+  return formatNumberWithSeparators(value);
 }
 
 export interface ZakatCalculatorProps {
@@ -210,8 +212,11 @@ export function ZakatCalculator({ visible, onClose }: ZakatCalculatorProps) {
       <Text style={styles.inputLabel}>{label}</Text>
       <TextInput
         value={form[field]}
-        onChangeText={value => updateField(field, value)}
-        keyboardType="numbers-and-punctuation"
+        onChangeText={value => {
+          const formatted = formatDecimalInput(value);
+          if (formatted !== null) updateField(field, formatted);
+        }}
+        keyboardType="decimal-pad"
         placeholder={placeholder}
         placeholderTextColor="#71998C"
         style={styles.input}

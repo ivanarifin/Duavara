@@ -3,13 +3,15 @@ import { Coordinates } from '@/domain/types';
 export const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
 export const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
 ] as const;
 export const OVERPASS_ENDPOINT = OVERPASS_ENDPOINTS[0];
 export const MAX_RADIUS_METERS = 5_000;
 export const MAX_NEARBY_MOSQUES = 50;
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS = 12_000;
+const OVERPASS_USER_AGENT =
+  'Duavara/1.0 (+https://github.com/ivanarifin/Duavara)';
 const EARTH_RADIUS_METERS = 6_371_000;
 
 type OverpassFetch = typeof fetch;
@@ -215,6 +217,7 @@ async function request(
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      'User-Agent': OVERPASS_USER_AGENT,
     },
     body: `data=${encodeURIComponent(query)}`,
     ...(controller ? { signal: controller.signal } : {}),

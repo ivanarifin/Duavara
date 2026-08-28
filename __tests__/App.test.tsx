@@ -79,6 +79,9 @@ test('rejects empty manual coordinate values', () => {
     latitude: 51.5,
     longitude: -0.12,
   });
+  expect(parseManualCoordinates('1e2', '0')).toBeNull();
+  expect(parseManualCoordinates('-90.1', '0')).toBeNull();
+  expect(parseManualCoordinates('0', '180.1')).toBeNull();
 });
 
 test('prefers the resolved region in the location label', () => {

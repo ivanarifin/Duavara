@@ -41,6 +41,10 @@ import {
   formatLocalDateKey,
   addDateKey,
   HighLatitudeRule,
+  isSignedDecimalInput,
+  isSignedIntegerInput,
+  parseSignedDecimal,
+  parseSignedInteger,
   LocationProfile,
   LocationProfileKind,
   LocationProfileStore,
@@ -283,10 +287,10 @@ export function parseManualCoordinates(
   const latitudeText = latitudeInput.trim();
   const longitudeText = longitudeInput.trim();
   if (!latitudeText || !longitudeText) return null;
-  const latitude = Number(latitudeText);
-  const longitude = Number(longitudeText);
-  return Number.isFinite(latitude) &&
-    Number.isFinite(longitude) &&
+  const latitude = parseSignedDecimal(latitudeText);
+  const longitude = parseSignedDecimal(longitudeText);
+  return latitude !== null &&
+    longitude !== null &&
     latitude >= -90 &&
     latitude <= 90 &&
     longitude >= -180 &&
@@ -804,6 +808,8 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         setIsLoading(false);
         return;
       }
+      setCoordinates(profile.coordinates);
+      syncProfileInputs(profile);
       await restoreCachedSchedules(profile, savedSettings, requestToken);
       if (!isCurrentRequest(requestToken)) return;
       setIsLoading(false);
@@ -1244,11 +1250,12 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     const longitude = parsedCoordinates?.longitude ?? Number.NaN;
     const timezone = timezoneInput.trim();
     const adjustments: PrayerAdjustments = {
-      Fajr: Number(adjustmentInputs.Fajr),
-      Dhuhr: Number(adjustmentInputs.Dhuhr),
-      Asr: Number(adjustmentInputs.Asr),
-      Maghrib: Number(adjustmentInputs.Maghrib),
-      Isha: Number(adjustmentInputs.Isha),
+      Fajr: parseSignedInteger(adjustmentInputs.Fajr || '0') ?? Number.NaN,
+      Dhuhr: parseSignedInteger(adjustmentInputs.Dhuhr || '0') ?? Number.NaN,
+      Asr: parseSignedInteger(adjustmentInputs.Asr || '0') ?? Number.NaN,
+      Maghrib:
+        parseSignedInteger(adjustmentInputs.Maghrib || '0') ?? Number.NaN,
+      Isha: parseSignedInteger(adjustmentInputs.Isha || '0') ?? Number.NaN,
     };
     if (
       !Number.isFinite(latitude) ||
@@ -3258,8 +3265,14 @@ function SettingsSheet({
                 <Text style={styles.coordinateLabel}>LATITUDE</Text>
                 <TextInput
                   value={latitude}
-                  onChangeText={onLatitude}
-                  keyboardType="numbers-and-punctuation"
+                  onChangeText={value => {
+                    if (isSignedDecimalInput(value)) onLatitude(value);
+                  }}
+                  keyboardType={
+                    Platform.OS === 'android'
+                      ? 'numeric'
+                      : 'numbers-and-punctuation'
+                  }
                   placeholder="e.g. 51.5074"
                   placeholderTextColor="#8C9A8F"
                   style={styles.coordinateInput}
@@ -3270,8 +3283,14 @@ function SettingsSheet({
                 <Text style={styles.coordinateLabel}>LONGITUDE</Text>
                 <TextInput
                   value={longitude}
-                  onChangeText={onLongitude}
-                  keyboardType="numbers-and-punctuation"
+                  onChangeText={value => {
+                    if (isSignedDecimalInput(value)) onLongitude(value);
+                  }}
+                  keyboardType={
+                    Platform.OS === 'android'
+                      ? 'numeric'
+                      : 'numbers-and-punctuation'
+                  }
                   placeholder="e.g. -0.1278"
                   placeholderTextColor="#8C9A8F"
                   style={styles.coordinateInput}
@@ -3302,8 +3321,15 @@ function SettingsSheet({
                   <Text style={styles.adjustmentLabel}>{prayer}</Text>
                   <TextInput
                     value={profileAdjustments[prayer]}
-                    onChangeText={value => onAdjustment(prayer, value)}
-                    keyboardType="numbers-and-punctuation"
+                    onChangeText={value => {
+                      if (isSignedIntegerInput(value))
+                        onAdjustment(prayer, value);
+                    }}
+                    keyboardType={
+                      Platform.OS === 'android'
+                        ? 'numeric'
+                        : 'numbers-and-punctuation'
+                    }
                     style={styles.adjustmentInput}
                     accessibilityLabel={`${prayer} minute adjustment`}
                   />

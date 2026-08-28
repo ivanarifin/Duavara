@@ -145,6 +145,10 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
     }
   }, [coordinates]);
 
+  useEffect(() => {
+    if (coordinates) loadMosques().catch(() => undefined);
+  }, [coordinates, loadMosques]);
+
   const handleToggleFavorite = useCallback(
     async (mosque: Mosque) => {
       try {

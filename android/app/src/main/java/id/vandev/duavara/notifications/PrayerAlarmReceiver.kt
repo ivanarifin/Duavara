@@ -27,14 +27,21 @@ class PrayerAlarmReceiver : BroadcastReceiver() {
     } else {
       AdhanVolumeCategory.NOTIFICATION
     }
+    val channelId = if (notification.adhan) {
+      try {
+        NotificationChannels.ensureAdhan(context, category)
+        NotificationChannels.channelId(category)
+      } catch (_: Exception) {
+        NotificationChannels.ensureDefault(context)
+        NotificationChannels.DEFAULT_CHANNEL_ID
+      }
+    } else {
+      NotificationChannels.ensureDefault(context)
+      NotificationChannels.DEFAULT_CHANNEL_ID
+    }
     val sound = NotificationChannels.soundUri(context, notification.adhan)
 
-    NotificationChannels.ensure(context)
-    val builder = NotificationCompat.Builder(
-      context,
-      if (notification.adhan) NotificationChannels.channelId(category)
-      else NotificationChannels.DEFAULT_CHANNEL_ID,
-    )
+    val builder = NotificationCompat.Builder(context, channelId)
       .setSmallIcon(R.drawable.ic_notification)
       .setContentTitle(notification.title)
       .setContentText(notification.body)
@@ -76,22 +83,9 @@ internal object NotificationChannels {
   private const val ADHAN_NOTIFICATION_CHANNEL_ID = "duavara-prayer-adhan-notification-v1"
   const val DEFAULT_CHANNEL_ID = "duavara-prayer-default"
 
-  fun ensure(context: Context) {
+  fun ensureDefault(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-    AdhanVolumeCategory.values().forEach { category ->
-      if (manager.getNotificationChannel(channelId(category)) == null) {
-        manager.createNotificationChannel(
-          android.app.NotificationChannel(
-            channelId(category),
-            "Prayer with Adhan (${category.value})",
-            android.app.NotificationManager.IMPORTANCE_DEFAULT,
-          ).apply {
-            setSound(soundUri(context, true), audioAttributes(category))
-          },
-        )
-      }
-    }
     if (manager.getNotificationChannel(DEFAULT_CHANNEL_ID) == null) {
       manager.createNotificationChannel(
         android.app.NotificationChannel(
@@ -100,6 +94,22 @@ internal object NotificationChannels {
           android.app.NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
           setSound(soundUri(context, false), notificationAudioAttributes())
+        },
+      )
+    }
+  }
+
+  fun ensureAdhan(context: Context, category: AdhanVolumeCategory) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+    if (manager.getNotificationChannel(channelId(category)) == null) {
+      manager.createNotificationChannel(
+        android.app.NotificationChannel(
+          channelId(category),
+          "Prayer with Adhan (${category.value})",
+          android.app.NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+          setSound(soundUri(context, true), audioAttributes(category))
         },
       )
     }
