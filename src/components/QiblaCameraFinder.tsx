@@ -11,7 +11,6 @@ import {
   Camera,
   useCameraDevice,
   useCameraPermission,
-  usePreviewOutput,
 } from 'react-native-vision-camera';
 import { QiblaData } from '@/domain';
 import { CompassHeading, getRelativeQiblaAngle } from '@/services/compass';
@@ -57,7 +56,6 @@ function QiblaCameraFinderContent({
   onClose: () => void;
 }) {
   const device = useCameraDevice('back');
-  const previewOutput = usePreviewOutput();
   const { hasPermission, canRequestPermission, requestPermission } =
     useCameraPermission();
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -88,7 +86,7 @@ function QiblaCameraFinderContent({
           <Camera
             style={StyleSheet.absoluteFill}
             device={device}
-            outputs={[previewOutput]}
+            implementationMode="compatible"
             isActive
             onError={() => setCameraError('Camera preview is unavailable.')}
           />

@@ -1,11 +1,15 @@
 import { Coordinates } from '@/domain/types';
 
 export const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
-export const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
+export const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+] as const;
+export const OVERPASS_ENDPOINT = OVERPASS_ENDPOINTS[0];
 export const MAX_RADIUS_METERS = 5_000;
 export const MAX_NEARBY_MOSQUES = 50;
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 20_000;
 const EARTH_RADIUS_METERS = 6_371_000;
 
 type OverpassFetch = typeof fetch;
@@ -34,6 +38,7 @@ export interface MosqueLookupOptions {
   radiusMeters?: number;
   timeoutMs?: number;
   fetchImpl?: OverpassFetch;
+  endpoints?: readonly string[];
 }
 
 export class MosqueLookupError extends Error {
@@ -85,7 +90,8 @@ function validateTimeout(timeoutMs: number): void {
 }
 
 function buildQuery(coordinates: Coordinates, radiusMeters: number): string {
-  return `[out:json];nwr["amenity"="place_of_worship"]["religion"="muslim"](around:${radiusMeters},${coordinates.latitude},${coordinates.longitude});out center tags;`;
+  const around = `(around:${radiusMeters},${coordinates.latitude},${coordinates.longitude})`;
+  return `[out:json][timeout:25];(nwr["amenity"="place_of_worship"]["religion"~"^(muslim|islam)$",i]${around};nwr["building"="mosque"]${around};);out center tags;`;
 }
 
 function isOSMTags(value: unknown): value is OSMTags {
@@ -192,14 +198,12 @@ function responseElements(body: unknown): OSMElement[] {
   if (!isRecord(body) || !Array.isArray(body.elements)) {
     throw new MosqueLookupError('Overpass returned an unexpected response');
   }
-  if (!body.elements.every(isOSMElement)) {
-    throw new MosqueLookupError('Overpass returned malformed mosque data');
-  }
-  return body.elements;
+  return body.elements.filter(isOSMElement);
 }
 
 async function request(
-  url: string,
+  endpoint: string,
+  query: string,
   fetchImpl: OverpassFetch,
   timeoutMs: number,
 ): Promise<{ response: Response; body: unknown }> {
@@ -207,8 +211,12 @@ async function request(
     typeof AbortController === 'undefined' ? undefined : new AbortController();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const fetchPromise = fetchImpl(url, {
-    method: 'GET',
+  const fetchPromise = fetchImpl(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+    },
+    body: `data=${encodeURIComponent(query)}`,
     ...(controller ? { signal: controller.signal } : {}),
   });
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -261,33 +269,56 @@ export async function getNearbyMosques(
   validateTimeout(timeoutMs);
 
   const query = buildQuery(coordinates, radiusMeters);
-  const url = `${OVERPASS_ENDPOINT}?data=${encodeURIComponent(query)}`;
-  const { response, body } = await request(
-    url,
-    options.fetchImpl ?? fetch,
-    timeoutMs,
-  );
-
-  if (!response.ok) {
-    throw new MosqueLookupError(
-      `Overpass request failed (HTTP ${response.status})`,
-      response.status,
-    );
+  const endpoints = options.endpoints ?? OVERPASS_ENDPOINTS;
+  if (
+    !endpoints.length ||
+    endpoints.some(endpoint => !endpoint.startsWith('https://'))
+  ) {
+    throw new MosqueLookupError('No valid Overpass endpoint is configured');
   }
 
-  const seen = new Set<string>();
-  return responseElements(body)
-    .map(element => normalizeElement(element, coordinates))
-    .filter((mosque): mosque is Mosque => mosque !== null)
-    .filter(mosque => {
-      if (seen.has(mosque.id)) return false;
-      seen.add(mosque.id);
-      return true;
-    })
-    .sort(
-      (left, right) =>
-        (left.distanceMeters ?? 0) - (right.distanceMeters ?? 0) ||
-        left.id.localeCompare(right.id),
-    )
-    .slice(0, MAX_NEARBY_MOSQUES);
+  let lastError: unknown;
+  for (const [index, endpoint] of endpoints.entries()) {
+    try {
+      const { response, body } = await request(
+        endpoint,
+        query,
+        options.fetchImpl ?? fetch,
+        timeoutMs,
+      );
+      if (!response.ok) {
+        throw new MosqueLookupError(
+          `Overpass request failed (HTTP ${response.status})`,
+          response.status,
+        );
+      }
+
+      const seen = new Set<string>();
+      return responseElements(body)
+        .map(element => normalizeElement(element, coordinates))
+        .filter((mosque): mosque is Mosque => mosque !== null)
+        .filter(mosque => {
+          if (seen.has(mosque.id)) return false;
+          seen.add(mosque.id);
+          return true;
+        })
+        .sort(
+          (left, right) =>
+            (left.distanceMeters ?? 0) - (right.distanceMeters ?? 0) ||
+            left.id.localeCompare(right.id),
+        )
+        .slice(0, MAX_NEARBY_MOSQUES);
+    } catch (error) {
+      lastError = error;
+      const statusCode =
+        error instanceof MosqueLookupError ? error.statusCode : undefined;
+      const canRetry =
+        statusCode === undefined || statusCode === 429 || statusCode >= 500;
+      if (!canRetry || index === endpoints.length - 1) throw error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new MosqueLookupError('Overpass request failed');
 }

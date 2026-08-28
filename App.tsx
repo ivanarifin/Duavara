@@ -78,6 +78,7 @@ import {
   getDeviceLocation,
   getLocationProfileStore,
   getNotificationHealth,
+  hasNativeNotificationSupport,
   NotificationHealth,
   getPrayerSettings,
   openBatteryOptimizationSettings,
@@ -388,6 +389,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     Record<PrayerName, string>
   >({ Fajr: '0', Dhuhr: '0', Asr: '0', Maghrib: '0', Isha: '0' });
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const nativeNotificationsAvailable = hasNativeNotificationSupport();
   const [notificationHealth, setNotificationHealth] =
     useState<NotificationHealth>({
       notifications: 'unknown',
@@ -1490,6 +1492,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         highLatitudeRule={highLatitudeRuleInput}
         profileAdjustments={adjustmentInputs}
         health={notificationHealth}
+        nativeNotificationsAvailable={nativeNotificationsAvailable}
         latitude={latitudeInput}
         longitude={longitudeInput}
         isBusy={isRefreshing}
@@ -2561,6 +2564,7 @@ function SettingsSheet({
   highLatitudeRule,
   profileAdjustments,
   health,
+  nativeNotificationsAvailable,
   latitude,
   longitude,
   isBusy,
@@ -2605,6 +2609,7 @@ function SettingsSheet({
   highLatitudeRule: HighLatitudeRule | 'default';
   profileAdjustments: Record<PrayerName, string>;
   health: NotificationHealth;
+  nativeNotificationsAvailable: boolean;
   latitude: string;
   longitude: string;
   isBusy: boolean;
@@ -2894,7 +2899,10 @@ function SettingsSheet({
                 accessibilityLabel="Fasting alarms"
                 accessibilityHint="Schedules Suhoor and Imsak alerts"
                 accessibilityRole="switch"
-                disabled={settings.fastingRoutine === 'off'}
+                disabled={
+                  settings.fastingRoutine === 'off' ||
+                  !nativeNotificationsAvailable
+                }
                 trackColor={{ false: COLORS.sand, true: COLORS.moss }}
                 thumbColor={COLORS.cream}
               />
@@ -2957,6 +2965,7 @@ function SettingsSheet({
               <Switch
                 value={settings.notificationsEnabled}
                 onValueChange={onNotifications}
+                disabled={!nativeNotificationsAvailable}
                 accessibilityLabel="Prayer reminders"
                 accessibilityHint="Schedules native prayer alerts"
                 accessibilityRole="switch"
@@ -3096,6 +3105,16 @@ function SettingsSheet({
                   label="After restart"
                   value="Reschedules reminders"
                 />
+              ) : null}
+              {!nativeNotificationsAvailable ? (
+                <Text
+                  style={styles.nativeReminderUnavailable}
+                  accessibilityRole="alert"
+                >
+                  Reminders require the latest Duavara app build. Reinstall the
+                  current APK, then reopen these settings to allow
+                  notifications.
+                </Text>
               ) : null}
               <Text style={styles.healthHint}>
                 Focus, Do Not Disturb, and system notification settings can
@@ -4376,6 +4395,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     textAlign: 'right',
+  },
+  nativeReminderUnavailable: {
+    color: '#9A3F2B',
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 8,
   },
   healthHint: { color: '#65756A', fontSize: 10, lineHeight: 14, marginTop: 8 },
   healthActions: {

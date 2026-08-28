@@ -335,8 +335,6 @@ export function WorshipCompanion({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: COLORS.background,
-    padding: 20,
     gap: 14,
   },
   summaryRow: {
@@ -413,21 +411,23 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   prayerList: {
-    gap: 8,
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.border,
+    borderRadius: 22,
+    borderWidth: 1,
+    overflow: 'hidden',
   },
   prayerRow: {
     alignItems: 'center',
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.border,
-    borderRadius: 14,
-    borderWidth: 1,
+    borderBottomColor: COLORS.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    minHeight: 64,
-    paddingHorizontal: 14,
+    minHeight: 76,
+    paddingHorizontal: 15,
   },
   prayerRowComplete: {
     backgroundColor: '#103A31',
-    borderColor: COLORS.emeraldDeep,
+    borderBottomColor: COLORS.emeraldDeep,
   },
   pressed: {
     opacity: 0.78,

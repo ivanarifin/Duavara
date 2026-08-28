@@ -21,6 +21,7 @@ import {
   getNearbyMosques,
   MAX_NEARBY_MOSQUES,
   Mosque,
+  MosqueLookupError,
   OSM_ATTRIBUTION,
 } from '@/services/mosques';
 
@@ -136,13 +137,11 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
       if (currentRequestId !== requestId.current) return;
       setMosques(results.slice(0, MAX_NEARBY_MOSQUES));
       setState('success');
-    } catch {
+    } catch (errorValue) {
       if (currentRequestId !== requestId.current) return;
       setMosques([]);
       setState('error');
-      setError(
-        "We couldn't find nearby mosques. Check your connection and try again.",
-      );
+      setError(mosqueSearchMessage(errorValue));
     }
   }, [coordinates]);
 
@@ -359,6 +358,21 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
       </Pressable>
     </View>
   );
+}
+
+function mosqueSearchMessage(error: unknown): string {
+  if (error instanceof MosqueLookupError) {
+    if (error.statusCode === 429) {
+      return 'The mosque directory is busy. Try again in a moment.';
+    }
+    if (error.statusCode && error.statusCode >= 500) {
+      return 'The mosque directory is temporarily unavailable. Try again shortly.';
+    }
+    if (error.message.includes('timed out')) {
+      return 'The mosque directory took too long to respond. Try again in a moment.';
+    }
+  }
+  return "We couldn't complete the mosque search. Check your connection and try again.";
 }
 
 function toMosqueFavorite(mosque: Mosque): MosqueFavorite {

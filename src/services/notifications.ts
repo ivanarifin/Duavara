@@ -127,11 +127,11 @@ export function normalizeNotificationHealth(
 }
 
 function getNativeNotificationsCandidate():
-  | DuavaraNotificationsModule
+  | Partial<DuavaraNotificationsModule>
   | undefined {
   const module: unknown = NativeModules.DuavaraNotifications;
   return typeof module === 'object' && module !== null
-    ? (module as DuavaraNotificationsModule)
+    ? (module as Partial<DuavaraNotificationsModule>)
     : undefined;
 }
 
@@ -149,16 +149,21 @@ type ScheduledReminder = NativePrayerNotification & {
   date: string;
 };
 
+export function hasNativeNotificationSupport(): boolean {
+  const module = getNativeNotificationsCandidate();
+  return Boolean(
+    module?.requestPermission && module.schedule && module.cancelWithPrefix,
+  );
+}
+
 function getNativeNotifications(): DuavaraNotificationsModule {
   const module = getNativeNotificationsCandidate();
-  if (
-    !module?.requestPermission ||
-    !module?.schedule ||
-    !module?.cancelWithPrefix
-  ) {
-    throw new Error('Native notifications are unavailable on this device');
+  if (!hasNativeNotificationSupport()) {
+    throw new Error(
+      'Native reminder service is unavailable. Reinstall the current Duavara APK; a JavaScript reload cannot install native reminder support.',
+    );
   }
-  return module;
+  return module as DuavaraNotificationsModule;
 }
 
 function createPrayerReminders(

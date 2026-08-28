@@ -37,7 +37,7 @@ describe('nearby mosque lookup', () => {
 
       const lookup = getNearbyMosques(
         { latitude: 0, longitude: 0 },
-        { fetchImpl, timeoutMs: 10 },
+        { fetchImpl, timeoutMs: 10, endpoints: [OVERPASS_ENDPOINT] },
       );
       await Promise.resolve();
       await Promise.resolve();
@@ -51,7 +51,7 @@ describe('nearby mosque lookup', () => {
       jest.useRealTimers();
     }
   });
-  test('builds an encoded Overpass query with bounded coordinates and radius', async () => {
+  test('posts a bounded Overpass query with broader mosque tags', async () => {
     const fetchImpl = fetchMock({ elements: [] });
 
     await getNearbyMosques(
@@ -60,14 +60,16 @@ describe('nearby mosque lookup', () => {
     );
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(url.startsWith(`${OVERPASS_ENDPOINT}?data=`)).toBe(true);
-    expect(init.method).toBe('GET');
-    const query = new URL(url).searchParams.get('data');
-    expect(query).toContain('[out:json]');
-    expect(query).toContain(
-      'nwr["amenity"="place_of_worship"]["religion"="muslim"]',
-    );
+    const [endpoint, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(endpoint).toBe(OVERPASS_ENDPOINT);
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual({
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+    });
+    const query = new URLSearchParams(String(init.body)).get('data');
+    expect(query).toContain('[out:json][timeout:25]');
+    expect(query).toContain('"religion"~"^(muslim|islam)$",i');
+    expect(query).toContain('nwr["building"="mosque"]');
     expect(query).toContain('(around:5000,35.681236,139.767125)');
   });
 
@@ -182,20 +184,44 @@ describe('nearby mosque lookup', () => {
     expect(mosques.at(-1)?.name).toBe(`Mosque ${MAX_NEARBY_MOSQUES}`);
   });
 
-  test('rejects malformed responses and HTTP errors', async () => {
+  test('skips malformed elements and stops on non-retryable HTTP errors', async () => {
     await expect(
       getNearbyMosques(
         { latitude: 0, longitude: 0 },
         { fetchImpl: fetchMock({ elements: [{ type: 'node' }] }) },
       ),
-    ).rejects.toThrow('malformed mosque data');
+    ).resolves.toEqual([]);
+
+    const fetchImpl = fetchMock({ error: 'not found' }, false, 404);
+    await expect(
+      getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        {
+          fetchImpl,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+        },
+      ),
+    ).rejects.toThrow('HTTP 404');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test('falls back after an overloaded endpoint', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce(response({ error: 'overloaded' }, false, 503))
+      .mockResolvedValueOnce(response({ elements: [] }));
 
     await expect(
       getNearbyMosques(
         { latitude: 0, longitude: 0 },
-        { fetchImpl: fetchMock({ error: 'overloaded' }, false, 503) },
+        {
+          fetchImpl,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+        },
       ),
-    ).rejects.toThrow('HTTP 503');
+    ).resolves.toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1][0]).toBe('https://fallback.example/api');
   });
 
   test('times out an injected fetch', async () => {
@@ -204,7 +230,7 @@ describe('nearby mosque lookup', () => {
 
     const lookup = getNearbyMosques(
       { latitude: 0, longitude: 0 },
-      { fetchImpl, timeoutMs: 10 },
+      { fetchImpl, timeoutMs: 10, endpoints: [OVERPASS_ENDPOINT] },
     );
     jest.advanceTimersByTime(10);
 

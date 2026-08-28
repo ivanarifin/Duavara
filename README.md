@@ -162,7 +162,7 @@ npm test -- --runInBand
 npm run lint
 ```
 
-If prayer data does not appear, select or refresh a saved place and check network access to the AlAdhan API. If only cached data is available, the app displays up to 30 saved days for the active place and offers pull-to-refresh. If reminders do not appear, open **Prayer settings → Notification health** and enable notification permission; on Android, exact-alarm or battery settings may also be relevant. If live compass guidance is unavailable, use the displayed Qibla bearing or calibrate/move the device away from metal and magnets.
+If prayer data does not appear, select or refresh a saved place and check network access to the AlAdhan API. If only cached data is available, the app displays up to 30 saved days for the active place and offers pull-to-refresh. If reminders show **Unavailable** after a rename or native-code update, reinstall the current Duavara APK—Metro reloads cannot update Kotlin modules—then enable notification permission; on Android, exact-alarm or battery settings may also be relevant. Nearby mosque search retries a second public Overpass service if the first is busy; VPNs, captive portals, or offline connections can still prevent both services from responding. If live compass guidance is unavailable, use the displayed Qibla bearing or calibrate/move the device away from metal and magnets.
 
 For iOS native changes, reinstall Pods with `bundle exec pod install --project-directory=ios`. For Android native changes, a clean rebuild may be needed from Android Studio or with Gradle.
 
