@@ -1741,7 +1741,7 @@ PODS:
     - React-perflogger (= 0.87.1)
     - React-utils (= 0.87.1)
     - ReactNativeDependencies
-  - ReactNativeDependencies (0.87.0)
+  - ReactNativeDependencies (0.87.1)
   - RNCAsyncStorage (2.2.0):
     - hermes-engine
     - RCTRequired
@@ -1790,7 +1790,7 @@ PODS:
     - Yoga
   - SocketRocket (0.7.1):
     - ReactNativeDependencies
-  - VisionCamera (5.0.0):
+  - VisionCamera (5.0.11):
     - hermes-engine
     - NitroImage
     - NitroModules
@@ -2190,12 +2190,12 @@ SPEC CHECKSUMS:
   ReactAppDependencyProvider: 531dee09fa5ac21ef8a236a0c4767c3b2f9db977
   ReactCodegen: 35b96d81c5528b5774f73e938ce4be8eb879d7bd
   ReactCommon: 7d2d036b7250e66dce71d19f47160d4b31fbb92a
-  ReactNativeDependencies: ec5530432d8191b38e278117d498aaff05ea9d6f
+  ReactNativeDependencies: 94c922c39e0e6150ee9ad05e2ca1946e0ef55783
   RNCAsyncStorage: 4be1b9db4b74bc27e0ca61f9f1590d7c0d83b7d3
   RNFS: 4ac0f0ea233904cb798630b3c077808c06931688
   RNSound: 7834976738879ac147b8f827917ff67e65136e69
   SocketRocket: d57b1af80c029e12a75cd9b218287c67381e4593
-  VisionCamera: 0e928f5dfab8e0b411c353ce799742e427faaf73
+  VisionCamera: f92589baf133555f6a4b1fb95de39c4bd30650d4
   Yoga: 58b502c52b14ad3c4468805d461fc37d275c2a42
 
 PODFILE CHECKSUM: 1659103c2457bbefb0a15fb0239894e4e474ffff

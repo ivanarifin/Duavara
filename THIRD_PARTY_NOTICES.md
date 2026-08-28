@@ -30,6 +30,12 @@ AlQuran.cloud's terms require preservation of the Uthmani text and attribution t
 
 These libraries provide on-device playback and private-document-directory downloads for user-selected Quran recitations.
 
+## Camera preview
+
+- `react-native-vision-camera` 5.0.11 — https://github.com/mrousavy/react-native-vision-camera — MIT License.
+
+Duavara uses this library for the optional Qibla camera preview. Version 5.0.11 includes the upstream Android release-minification fix that preserves its native frame converter.
+
 ## OpenStreetMap directions
 
 Saved-mosque directions open an external OpenStreetMap URL. Duavara does not bundle map tiles or use a paid map SDK. Nearby mosque data and directions remain subject to OpenStreetMap attribution and the relevant external service terms.

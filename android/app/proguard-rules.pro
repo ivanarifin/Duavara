@@ -8,3 +8,5 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Add any project specific keep options here:
+# VisionCamera creates this Nitro HybridObject reflectively; keep it in minified builds.
+-keep class com.margelo.nitro.camera.HybridFrameConverter { *; }

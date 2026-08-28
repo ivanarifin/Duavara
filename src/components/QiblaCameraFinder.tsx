@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AppState,
   Linking,
   Modal,
   Pressable,
@@ -58,14 +59,54 @@ function QiblaCameraFinderContent({
   const device = useCameraDevice('back');
   const { hasPermission, canRequestPermission, requestPermission } =
     useCameraPermission();
+  const [appState, setAppState] = useState(AppState.currentState);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false);
+  const [hasRequestedPermission, setHasRequestedPermission] = useState(false);
+
+  const requestCameraPermission = useCallback(() => {
+    if (isRequestingPermission) return;
+    setIsRequestingPermission(true);
+    requestPermission()
+      .then(granted => {
+        if (granted) {
+          setCameraError(null);
+        } else {
+          setCameraError('Camera permission was not granted.');
+        }
+      })
+      .catch(() => setCameraError('Camera access is unavailable.'))
+      .finally(() => setIsRequestingPermission(false));
+  }, [isRequestingPermission, requestPermission]);
 
   useEffect(() => {
-    if (hasPermission) return;
-    requestPermission().catch(() =>
-      setCameraError('Camera access is unavailable.'),
-    );
-  }, [hasPermission, requestPermission]);
+    const subscription = AppState.addEventListener('change', setAppState);
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!hasPermission && canRequestPermission && !hasRequestedPermission) {
+      setHasRequestedPermission(true);
+      requestCameraPermission();
+    }
+  }, [
+    canRequestPermission,
+    hasPermission,
+    hasRequestedPermission,
+    requestCameraPermission,
+  ]);
+
+  const showCamera = hasPermission && device !== undefined && !cameraError;
+  const isCameraActive = showCamera && !isClosing && appState === 'active';
+
+  const closeCamera = useCallback(() => {
+    if (showCamera) {
+      setIsClosing(true);
+    } else {
+      onClose();
+    }
+  }, [onClose, showCamera]);
 
   const relativeAngle = useMemo(
     () =>
@@ -80,34 +121,57 @@ function QiblaCameraFinderContent({
   }, [heading, relativeAngle]);
 
   return (
-    <Modal visible animationType="fade" onRequestClose={onClose}>
+    <Modal visible animationType="fade" onRequestClose={closeCamera}>
       <View style={styles.screen}>
-        {hasPermission && device ? (
+        {showCamera ? (
           <Camera
             style={StyleSheet.absoluteFill}
             device={device}
             implementationMode="compatible"
-            isActive
-            onError={() => setCameraError('Camera preview is unavailable.')}
+            isActive={isCameraActive}
+            onStopped={() => {
+              if (isClosing) onClose();
+            }}
+            onError={() => {
+              if (isClosing) {
+                onClose();
+              } else {
+                setCameraError('Camera preview is unavailable.');
+              }
+            }}
           />
         ) : (
           <View style={styles.permissionFallback}>
             <Text style={styles.fallbackMoon}>☾</Text>
-            <Text style={styles.fallbackTitle}>Camera view is optional</Text>
-            <Text style={styles.fallbackText}>
-              Your regular Qibla bearing still works without camera access.
+            <Text style={styles.fallbackTitle}>
+              {cameraError
+                ? 'Camera preview unavailable'
+                : 'Camera view is optional'}
             </Text>
-            {canRequestPermission ? (
+            <Text style={styles.fallbackText}>
+              {cameraError ??
+                'Your regular Qibla bearing still works without camera access.'}
+            </Text>
+            {cameraError && hasPermission && device ? (
               <Pressable
                 style={styles.permissionButton}
-                onPress={() => {
-                  requestPermission().catch(() =>
-                    setCameraError('Camera access is unavailable.'),
-                  );
-                }}
+                onPress={() => setCameraError(null)}
                 accessibilityRole="button"
               >
-                <Text style={styles.permissionButtonText}>ALLOW CAMERA</Text>
+                <Text style={styles.permissionButtonText}>RETRY CAMERA</Text>
+              </Pressable>
+            ) : canRequestPermission ? (
+              <Pressable
+                style={styles.permissionButton}
+                onPress={requestCameraPermission}
+                disabled={isRequestingPermission}
+                accessibilityRole="button"
+              >
+                <Text style={styles.permissionButtonText}>
+                  {isRequestingPermission
+                    ? 'REQUESTING CAMERA…'
+                    : 'ALLOW CAMERA'}
+                </Text>
               </Pressable>
             ) : (
               <Pressable
@@ -129,7 +193,7 @@ function QiblaCameraFinderContent({
           </View>
           <Pressable
             style={styles.closeButton}
-            onPress={onClose}
+            onPress={closeCamera}
             accessibilityRole="button"
             accessibilityLabel="Close camera Qibla finder"
           >
@@ -137,7 +201,7 @@ function QiblaCameraFinderContent({
           </Pressable>
         </View>
 
-        {hasPermission && device ? (
+        {showCamera ? (
           <View style={styles.centerGuide} pointerEvents="none">
             <View style={styles.guideRing}>
               <Text style={styles.guideNorth}>N</Text>
@@ -172,7 +236,7 @@ function QiblaCameraFinderContent({
               <Text style={styles.warningText}>{cameraError}</Text>
             </View>
           ) : null}
-          {hasPermission && device ? (
+          {showCamera ? (
             <>
               <Text style={styles.panelLabel}>
                 QIBLA OVERLAY · TRUE-NORTH REFERENCE
