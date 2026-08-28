@@ -23,7 +23,7 @@ class DuavaraWidgetModule(
   }
 
   @ReactMethod
-  fun updatePrayerSchedule(prayers: ReadableArray, promise: Promise) {
+  fun updatePrayerSchedule(prayers: ReadableArray, locationLabel: String?, promise: Promise) {
     try {
       val normalized = buildList {
         for (index in 0 until prayers.size()) {
@@ -43,7 +43,7 @@ class DuavaraWidgetModule(
         return
       }
 
-      PrayerWidgetStore.save(context, normalized)
+      PrayerWidgetStore.save(context, normalized, locationLabel)
       NextPrayerWidgetProvider.refresh(context)
       promise.resolve(null)
     } catch (error: Exception) {

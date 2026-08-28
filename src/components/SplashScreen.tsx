@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, Image, StyleSheet, Text, View } from 'react-native';
-import kaabaAsset from '@/assets/kaaba-cc0.png';
+import appIconAsset from '@/assets/duavara-app-icon.png';
 
 const COLORS = {
   ink: '#08201E',
@@ -187,7 +187,7 @@ export function SplashScreen({ onFinish }: { onFinish: () => void }) {
             },
           ]}
         >
-          <Image source={kaabaAsset} style={styles.artifact} />
+          <Image source={appIconAsset} style={styles.artifact} />
         </Animated.View>
 
         <Animated.View

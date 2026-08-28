@@ -1,5 +1,5 @@
 import { DailyPrayerData } from '@/domain';
-import { toWidgetPrayers } from '@/services/widget';
+import { toWidgetPrayers, widgetLocationLabel } from '@/services/widget';
 
 const schedule = (date: string, offset: number): DailyPrayerData => ({
   date,
@@ -31,6 +31,12 @@ describe('widget schedule', () => {
 
   test('drops expired prayers so native can clear an exhausted schedule', () => {
     expect(toWidgetPrayers([schedule('2026-08-27', -10_000)])).toEqual([]);
+  });
+
+  test('prefers a resolved region over the saved place name', () => {
+    expect(widgetLocationLabel('Kota Bandung', 'Home')).toBe('Kota Bandung');
+    expect(widgetLocationLabel(null, 'Home')).toBe('Home');
+    expect(widgetLocationLabel(null, null)).toBeNull();
   });
 
   test('keeps future prayer timestamps in chronological order', () => {

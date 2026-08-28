@@ -10,7 +10,10 @@ export interface WidgetPrayer {
 
 type DuavaraWidgetModule = {
   clearPrayerSchedule(): Promise<void>;
-  updatePrayerSchedule(prayers: WidgetPrayer[]): Promise<void>;
+  updatePrayerSchedule(
+    prayers: WidgetPrayer[],
+    locationLabel: string | null,
+  ): Promise<void>;
 };
 
 function isWidgetPrayer(value: WidgetPrayer): boolean {
@@ -59,8 +62,16 @@ export async function clearPrayerWidget(expectedEpoch?: number): Promise<void> {
   );
 }
 
+export function widgetLocationLabel(
+  regionName: string | null,
+  profileName: string | null,
+): string | null {
+  return regionName ?? profileName;
+}
+
 export async function syncPrayerWidget(
   schedules: readonly DailyPrayerData[],
+  locationLabel: string | null = null,
 ): Promise<void> {
   const prayers = toWidgetPrayers(schedules);
   await withStorageLock(async () => {
@@ -73,6 +84,6 @@ export async function syncPrayerWidget(
       await widget.clearPrayerSchedule?.();
       return;
     }
-    await widget.updatePrayerSchedule?.(prayers);
+    await widget.updatePrayerSchedule?.(prayers, locationLabel);
   });
 }

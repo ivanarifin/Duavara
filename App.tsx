@@ -98,6 +98,7 @@ import {
   schedulePrayerNotifications,
   stopAdhanPreview,
   syncPrayerWidget,
+  widgetLocationLabel,
 } from '@/services';
 
 type Tab = 'today' | 'calendar' | 'qibla' | 'discover';
@@ -418,6 +419,9 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       bootRescheduling: 'notApplicable',
     });
   const requestTokenRef = useRef(0);
+  const regionNameRef = useRef(regionName);
+  regionNameRef.current = regionName;
+  const activeProfileNameRef = useRef<string | null>(null);
   const regionRequestRef = useRef(0);
   const qiblaRequestTokenRef = useRef(0);
   const settingsRef = useRef(settings);
@@ -472,6 +476,21 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       ) ?? null,
     [profileStore],
   );
+  activeProfileNameRef.current = activeProfile?.name ?? null;
+
+  useEffect(() => {
+    if (!upcomingSchedules.length) return;
+    const queued = widgetCommitRef.current.then(() =>
+      syncPrayerWidget(
+        upcomingSchedules,
+        widgetLocationLabel(
+          regionNameRef.current,
+          activeProfileNameRef.current,
+        ),
+      ).catch(() => undefined),
+    );
+    widgetCommitRef.current = queued.catch(() => undefined);
+  }, [regionName, upcomingSchedules]);
 
   const syncProfileInputs = useCallback((profile: LocationProfile) => {
     setProfileNameInput(profile.name);
@@ -546,9 +565,15 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     (schedules: readonly DailyPrayerData[], requestToken: number) => {
       const queued = widgetCommitRef.current.then(async () => {
         if (!isCurrentRequest(requestToken)) return;
-        await syncPrayerWidget(schedules).catch(() => undefined);
+        const locationLabel = widgetLocationLabel(
+          regionNameRef.current,
+          activeProfileNameRef.current,
+        );
+        await syncPrayerWidget(schedules, locationLabel).catch(() => undefined);
         if (!isCurrentRequest(requestToken)) {
-          await syncPrayerWidget(schedulesRef.current).catch(() => undefined);
+          await syncPrayerWidget(schedulesRef.current, locationLabel).catch(
+            () => undefined,
+          );
         }
       });
       widgetCommitRef.current = queued.catch(() => undefined);

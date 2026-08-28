@@ -68,10 +68,14 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
       val views = RemoteViews(context.packageName, R.layout.widget_next_prayer)
       views.setOnClickPendingIntent(R.id.widget_root, appPendingIntent(context))
       views.setTextViewText(R.id.widget_label, "NEXT PRAYER")
+      views.setTextViewText(
+        R.id.widget_location,
+        PrayerWidgetStore.locationLabel(context) ?: "Set location in Duavara",
+      )
 
       if (nextPrayer == null) {
         views.setTextViewText(R.id.widget_prayer_name, "Open Duavara")
-        views.setTextViewText(R.id.widget_prayer_time, "Refresh to update")
+        views.setTextViewText(R.id.widget_prayer_time, "Refresh")
       } else {
         views.setTextViewText(R.id.widget_prayer_name, nextPrayer.name)
         views.setTextViewText(R.id.widget_prayer_time, nextPrayer.time)
