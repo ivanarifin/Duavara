@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Audit production and development dependencies
+        run: npm run audit:dependencies
+
+  quality:
+    name: Lint, test, and Android release validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager --install \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check release versions
+        run: npm run version:check -- --ios-build-number 1 --android-build-code 1
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test -- --runInBand
+
+      - name: Build Android debug
+        run: ./gradlew assembleDebug
+        working-directory: android
+
+      - name: Lint Android app debug
+        run: ./gradlew :app:lintDebug
+        working-directory: android
+
+      - name: Generate temporary CI signing key
+        run: |
+          store_password="$(openssl rand -hex 24)"
+          key_password="$(openssl rand -hex 24)"
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/duavara-ci-upload.jks" \
+            -storetype JKS \
+            -storepass "$store_password" \
+            -keypass "$key_password" \
+            -alias ci-upload \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 1 \
+            -dname "CN=Duavara CI, OU=Build, O=Duavara, C=US"
+          {
+            printf 'DUAVARA_UPLOAD_STORE_FILE=%s\n' "$RUNNER_TEMP/duavara-ci-upload.jks"
+            printf 'DUAVARA_UPLOAD_STORE_PASSWORD=%s\n' "$store_password"
+            printf 'DUAVARA_UPLOAD_KEY_ALIAS=ci-upload\n'
+            printf 'DUAVARA_UPLOAD_KEY_PASSWORD=%s\n' "$key_password"
+            printf 'DUAVARA_VERSION_CODE=1\n'
+          } >> "$GITHUB_ENV"
+
+      - name: Build signed Android release APK
+        run: npm run bundle:apk -- --version-code 1
+
+      - name: Build signed Android release AAB
+        run: npm run bundle:aab -- --version-code 1
+
+      - name: Validate Android release signatures
+        run: |
+          apk_path="$(find dist -type f -name '*.apk' -print -quit)"
+          aab_path="$(find dist -type f -name '*.aab' -print -quit)"
+          test -n "$apk_path"
+          test -n "$aab_path"
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose "$apk_path"
+          jarsigner -verify "$aab_path"
+
+  ios:
+    name: Build iOS simulator
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Ruby dependencies
+        run: bundle install
+
+      - name: Install CocoaPods dependencies
+        run: bundle exec pod install --project-directory=ios
+
+      - name: Build iOS simulator
+        run: xcodebuild -workspace ios/Duavara.xcworkspace -scheme Duavara -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build

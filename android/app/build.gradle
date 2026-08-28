@@ -57,7 +57,40 @@ react {
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
-def enableProguardInReleaseBuilds = false
+def packageJson = new groovy.json.JsonSlurper().parse(file("../../package.json"))
+def versionCodeValue = System.getenv("DUAVARA_VERSION_CODE") ?: "1"
+def localUploadKeystore = file("duavara-upload.jks")
+def keychainSecret = { account ->
+    if (!System.getProperty("os.name").toLowerCase().contains("mac")) return null
+    def process = new ProcessBuilder(
+        "security",
+        "find-generic-password",
+        "-w",
+        "-a",
+        account,
+        "-s",
+        "Duavara Android Upload Keystore",
+    ).redirectErrorStream(true).start()
+    def value = process.inputStream.text.trim()
+    return process.waitFor() == 0 && value ? value : null
+}
+def releaseSigningValues = [
+    "DUAVARA_UPLOAD_STORE_FILE": System.getenv("DUAVARA_UPLOAD_STORE_FILE") ?: (localUploadKeystore.exists() ? localUploadKeystore.name : null),
+    "DUAVARA_UPLOAD_STORE_PASSWORD": System.getenv("DUAVARA_UPLOAD_STORE_PASSWORD") ?: keychainSecret("store-password"),
+    "DUAVARA_UPLOAD_KEY_ALIAS": System.getenv("DUAVARA_UPLOAD_KEY_ALIAS") ?: keychainSecret("key-alias"),
+    "DUAVARA_UPLOAD_KEY_PASSWORD": System.getenv("DUAVARA_UPLOAD_KEY_PASSWORD") ?: keychainSecret("key-password"),
+]
+def missingReleaseSigningValues = releaseSigningValues.findAll { key, value -> !value }.keySet()
+def hasReleaseSigning = missingReleaseSigningValues.isEmpty()
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def releaseTaskRequested = taskGraph.allTasks.any { task ->
+        task.name.toLowerCase().contains("release")
+    }
+    if (releaseTaskRequested && !hasReleaseSigning) {
+        throw new GradleException("Release signing is required. Set ${missingReleaseSigningValues.join(', ')} or configure the local Duavara Android Upload Keystore.")
+    }
+}
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -77,13 +110,13 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.waqtora"
+    namespace "id.vandev.duavara"
     defaultConfig {
-        applicationId "com.waqtora"
+        applicationId "id.vandev.duavara"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode versionCodeValue.toInteger()
+        versionName packageJson.version.toString()
     }
     signingConfigs {
         debug {
@@ -92,16 +125,25 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(releaseSigningValues["DUAVARA_UPLOAD_STORE_FILE"])
+                storePassword releaseSigningValues["DUAVARA_UPLOAD_STORE_PASSWORD"]
+                keyAlias releaseSigningValues["DUAVARA_UPLOAD_KEY_ALIAS"]
+                keyPassword releaseSigningValues["DUAVARA_UPLOAD_KEY_PASSWORD"]
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
-            minifyEnabled enableProguardInReleaseBuilds
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }

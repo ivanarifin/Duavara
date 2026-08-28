@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">Waqtora</string>
+    <string name="app_name">Duavara</string>
+    <string name="widget_next_prayer_name">Duavara — Next prayer</string>
 </resources>
