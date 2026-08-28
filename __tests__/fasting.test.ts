@@ -1,4 +1,9 @@
-import { DailyPrayerData, getFastingAlarms, isFastingDate } from '@/domain';
+import {
+  DailyPrayerData,
+  getFastingAlarms,
+  isFastingDate,
+  isValidLocalDateKey,
+} from '@/domain';
 
 function schedule(date: string, imsakAt: string): DailyPrayerData {
   const imsakDate = new Date(imsakAt);
@@ -33,6 +38,13 @@ describe('fasting schedule', () => {
     expect(isFastingDate('2026-08-31', 'dawud', '2026-08-31')).toBe(true);
     expect(isFastingDate('2026-09-01', 'dawud', '2026-08-31')).toBe(false);
     expect(isFastingDate('2026-09-02', 'dawud', '2026-08-31')).toBe(true);
+  });
+
+  test('accepts only real local calendar dates for the Dawud anchor', () => {
+    expect(isValidLocalDateKey('2028-02-29')).toBe(true);
+    expect(isValidLocalDateKey('2026-02-29')).toBe(false);
+    expect(isValidLocalDateKey('2026-02-30')).toBe(false);
+    expect(isValidLocalDateKey('2026-2-03')).toBe(false);
   });
 
   test('creates a suhoor reminder 30 minutes before Imsak and an Imsak alarm', () => {

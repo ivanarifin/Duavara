@@ -41,7 +41,9 @@ import {
   formatLocalDateKey,
   addDateKey,
   HighLatitudeRule,
+  isValidLocalDateKey,
   isSignedDecimalInput,
+  isUnsignedIntegerInput,
   isSignedIntegerInput,
   parseSignedDecimal,
   parseSignedInteger,
@@ -298,6 +300,11 @@ export function parseManualCoordinates(
     longitude <= 180
     ? { latitude, longitude }
     : null;
+}
+
+function dateKeyParts(dateKey: string | null): [string, string, string] {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey ?? '');
+  return match ? [match[1], match[2], match[3]] : ['', '', ''];
 }
 
 export function formatLocationLabel(
@@ -1159,10 +1166,10 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       const nextSettings: PrayerSettings = {
         ...currentSettings,
         fastingRoutine,
-        dawudAnchorDate:
-          fastingRoutine === 'dawud' && !currentSettings.dawudAnchorDate
-            ? formatLocalDateKey(new Date())
-            : currentSettings.dawudAnchorDate,
+        fastingAlarmsEnabled:
+          fastingRoutine === 'off'
+            ? false
+            : currentSettings.fastingAlarmsEnabled,
       };
       await applyNotificationSettings(
         nextSettings,
@@ -1172,11 +1179,49 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     [applyNotificationSettings],
   );
 
+  const setDawudAnchorDate = useCallback(
+    async (dawudAnchorDate: string) => {
+      const requestToken = requestTokenRef.current;
+      const nextSettings = {
+        ...settingsRef.current,
+        fastingRoutine: 'dawud' as const,
+        dawudAnchorDate,
+      };
+      try {
+        await commitNotificationSettings(nextSettings, requestToken);
+        if (isCurrentRequest(requestToken)) {
+          setMessage(
+            'Dawud fasting anchor updated. This date is a fasting day.',
+          );
+        }
+      } catch (error) {
+        if (isCurrentRequest(requestToken)) {
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : 'Unable to update Dawud fasting anchor.',
+          );
+        }
+      }
+    },
+    [commitNotificationSettings, isCurrentRequest],
+  );
+
   const toggleFastingAlarms = useCallback(
     async (enabled: boolean) => {
       const requestToken = requestTokenRef.current;
       if (enabled && settingsRef.current.fastingRoutine === 'off') {
         setMessage('Choose a fasting routine before enabling fasting alarms.');
+        return;
+      }
+      if (
+        enabled &&
+        settingsRef.current.fastingRoutine === 'dawud' &&
+        !settingsRef.current.dawudAnchorDate
+      ) {
+        setMessage(
+          'Set your Dawud fasting anchor date before enabling fasting alarms.',
+        );
         return;
       }
       const nextSettings = {
@@ -1607,6 +1652,9 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         onStopAdhanPreview={stopAdhanPreview}
         onFastingRoutine={routine => {
           setFastingRoutine(routine).catch(() => undefined);
+        }}
+        onDawudAnchorDate={date => {
+          setDawudAnchorDate(date).catch(() => undefined);
         }}
         onFastingAlarms={enabled => {
           toggleFastingAlarms(enabled).catch(() => undefined);
@@ -2645,6 +2693,7 @@ function SettingsSheet({
   onPreviewAdhan,
   onStopAdhanPreview,
   onFastingRoutine,
+  onDawudAnchorDate,
   onFastingAlarms,
   onSuhoorReminder,
   onImsakAlarm,
@@ -2692,6 +2741,7 @@ function SettingsSheet({
   onPreviewAdhan: () => Promise<boolean>;
   onStopAdhanPreview: () => Promise<void>;
   onFastingRoutine: (routine: PrayerSettings['fastingRoutine']) => void;
+  onDawudAnchorDate: (date: string) => void;
   onFastingAlarms: (enabled: boolean) => void;
   onSuhoorReminder: (enabled: boolean) => void;
   onImsakAlarm: (enabled: boolean) => void;
@@ -2717,6 +2767,31 @@ function SettingsSheet({
   const [adhanPreviewError, setAdhanPreviewError] = useState<string | null>(
     null,
   );
+  const [dawudAnchorYear, setDawudAnchorYear] = useState('');
+  const [dawudAnchorMonth, setDawudAnchorMonth] = useState('');
+  const [dawudAnchorDay, setDawudAnchorDay] = useState('');
+  const [dawudAnchorError, setDawudAnchorError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const [year, month, day] = dateKeyParts(settings.dawudAnchorDate);
+    setDawudAnchorYear(year);
+    setDawudAnchorMonth(month);
+    setDawudAnchorDay(day);
+    setDawudAnchorError(null);
+  }, [settings.dawudAnchorDate]);
+
+  const saveDawudAnchorDate = () => {
+    const date = `${dawudAnchorYear}-${dawudAnchorMonth.padStart(
+      2,
+      '0',
+    )}-${dawudAnchorDay.padStart(2, '0')}`;
+    if (!isValidLocalDateKey(date)) {
+      setDawudAnchorError('Enter a real date using year, month, and day.');
+      return;
+    }
+    setDawudAnchorError(null);
+    onDawudAnchorDate(date);
+  };
 
   const closeSettings = () => {
     onStopAdhanPreview()
@@ -2949,11 +3024,99 @@ function SettingsSheet({
             </View>
             <Text style={styles.settingsHint}>
               {settings.fastingRoutine === 'dawud'
-                ? 'Dawud alternates daily. Today is your fasting anchor day.'
+                ? settings.dawudAnchorDate
+                  ? `Anchor ${settings.dawudAnchorDate} is a fasting day. Dawud fasting alternates every other day.`
+                  : 'Set the date that is a fasting day to begin your Dawud cycle.'
                 : settings.fastingRoutine === 'off'
                 ? 'Choose Mon & Thu or Dawud above to enable fasting alarms.'
                 : 'Schedules Suhoor and Imsak for your chosen fasting days.'}
             </Text>
+            {settings.fastingRoutine === 'dawud' ? (
+              <View style={styles.dawudAnchorCard}>
+                <Text style={styles.dawudAnchorTitle}>
+                  DAWUD FASTING ANCHOR
+                </Text>
+                <Text style={styles.dawudAnchorHint}>
+                  This date is a fasting day. The cycle alternates every other
+                  day from it.
+                </Text>
+                <View style={styles.dawudAnchorRow}>
+                  <View style={styles.dawudAnchorFieldYear}>
+                    <Text style={styles.dawudAnchorLabel}>YEAR</Text>
+                    <TextInput
+                      value={dawudAnchorYear}
+                      onChangeText={value => {
+                        if (isUnsignedIntegerInput(value)) {
+                          setDawudAnchorYear(value);
+                          setDawudAnchorError(null);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      maxLength={4}
+                      placeholder="2026"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.dawudAnchorInput}
+                      accessibilityLabel="Dawud fasting anchor year"
+                    />
+                  </View>
+                  <View style={styles.dawudAnchorField}>
+                    <Text style={styles.dawudAnchorLabel}>MONTH</Text>
+                    <TextInput
+                      value={dawudAnchorMonth}
+                      onChangeText={value => {
+                        if (isUnsignedIntegerInput(value)) {
+                          setDawudAnchorMonth(value);
+                          setDawudAnchorError(null);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      maxLength={2}
+                      placeholder="08"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.dawudAnchorInput}
+                      accessibilityLabel="Dawud fasting anchor month"
+                    />
+                  </View>
+                  <View style={styles.dawudAnchorField}>
+                    <Text style={styles.dawudAnchorLabel}>DAY</Text>
+                    <TextInput
+                      value={dawudAnchorDay}
+                      onChangeText={value => {
+                        if (isUnsignedIntegerInput(value)) {
+                          setDawudAnchorDay(value);
+                          setDawudAnchorError(null);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      maxLength={2}
+                      placeholder="31"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.dawudAnchorInput}
+                      accessibilityLabel="Dawud fasting anchor day"
+                    />
+                  </View>
+                </View>
+                <Pressable
+                  style={styles.dawudAnchorSaveButton}
+                  onPress={saveDawudAnchorDate}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save Dawud fasting anchor date"
+                  accessibilityHint="Sets this date as a fasting day and updates fasting alarms."
+                >
+                  <Text style={styles.dawudAnchorSaveText}>
+                    SAVE ANCHOR DATE
+                  </Text>
+                </Pressable>
+                {dawudAnchorError ? (
+                  <Text
+                    style={styles.dawudAnchorError}
+                    accessibilityRole="alert"
+                  >
+                    {dawudAnchorError}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
 
             <View style={styles.toggleRow}>
               <View style={styles.toggleTextBlock}>
@@ -4444,6 +4607,66 @@ const styles = StyleSheet.create({
   },
   profileOptionText: { color: COLORS.inkSoft, fontSize: 11, fontWeight: '800' },
   profileOptionTextSelected: { color: COLORS.cream },
+  dawudAnchorCard: {
+    backgroundColor: '#E8DEC8',
+    borderColor: '#D6C9AD',
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 12,
+    padding: 13,
+  },
+  dawudAnchorTitle: {
+    color: COLORS.inkSoft,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  dawudAnchorHint: {
+    color: '#65756A',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 5,
+  },
+  dawudAnchorRow: { flexDirection: 'row', gap: 8, marginTop: 11 },
+  dawudAnchorField: { flex: 1 },
+  dawudAnchorFieldYear: { flex: 1.35 },
+  dawudAnchorLabel: {
+    color: COLORS.moss,
+    fontSize: 9,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  dawudAnchorInput: {
+    backgroundColor: COLORS.cream,
+    borderColor: '#D6C9AD',
+    borderRadius: 9,
+    borderWidth: 1,
+    color: COLORS.ink,
+    fontSize: 14,
+    minHeight: 42,
+    paddingHorizontal: 9,
+    textAlign: 'center',
+  },
+  dawudAnchorSaveButton: {
+    alignItems: 'center',
+    backgroundColor: COLORS.ink,
+    borderRadius: 10,
+    marginTop: 12,
+    minHeight: 42,
+    justifyContent: 'center',
+  },
+  dawudAnchorSaveText: {
+    color: COLORS.cream,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  dawudAnchorError: {
+    color: '#A23B28',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 8,
+  },
   adjustmentRow: { flexDirection: 'row', gap: 6, marginTop: 9 },
   adjustmentField: { flex: 1 },
   adjustmentLabel: {

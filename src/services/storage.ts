@@ -7,6 +7,7 @@ import {
   completeLocalDataReset,
   withStorageLock,
 } from '@/services/storageLock';
+import { isValidLocalDateKey } from '@/domain/fasting';
 import {
   CachedScheduleSet,
   DailyPrayerData,
@@ -55,6 +56,11 @@ function settingsFromUnknown(value: unknown): PrayerSettings {
     };
   const candidate = value as Partial<PrayerSettings>;
   const enabled = candidate.enabledPrayers;
+  const fastingRoutine =
+    candidate.fastingRoutine === 'mondayThursday' ||
+    candidate.fastingRoutine === 'dawud'
+      ? candidate.fastingRoutine
+      : 'off';
   return {
     method:
       Number.isInteger(candidate.method) && (candidate.method as number) >= 0
@@ -74,13 +80,11 @@ function settingsFromUnknown(value: unknown): PrayerSettings {
       candidate.adhanVolumeCategory === 'media'
         ? candidate.adhanVolumeCategory
         : 'notification',
-    fastingRoutine:
-      candidate.fastingRoutine === 'mondayThursday' ||
-      candidate.fastingRoutine === 'dawud'
-        ? candidate.fastingRoutine
-        : 'off',
+    fastingRoutine,
     fastingAlarmsEnabled:
-      typeof candidate.fastingAlarmsEnabled === 'boolean'
+      fastingRoutine === 'off'
+        ? false
+        : typeof candidate.fastingAlarmsEnabled === 'boolean'
         ? candidate.fastingAlarmsEnabled
         : DEFAULT_PRAYER_SETTINGS.fastingAlarmsEnabled,
     suhoorReminderEnabled:
@@ -91,11 +95,9 @@ function settingsFromUnknown(value: unknown): PrayerSettings {
       typeof candidate.imsakAlarmEnabled === 'boolean'
         ? candidate.imsakAlarmEnabled
         : DEFAULT_PRAYER_SETTINGS.imsakAlarmEnabled,
-    dawudAnchorDate:
-      typeof candidate.dawudAnchorDate === 'string' &&
-      /^\d{4}-\d{2}-\d{2}$/.test(candidate.dawudAnchorDate)
-        ? candidate.dawudAnchorDate
-        : null,
+    dawudAnchorDate: isValidLocalDateKey(candidate.dawudAnchorDate)
+      ? candidate.dawudAnchorDate
+      : null,
     use24HourTime:
       typeof candidate.use24HourTime === 'boolean'
         ? candidate.use24HourTime

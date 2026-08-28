@@ -15,12 +15,15 @@ import {
   getCachedSchedule,
   getCachedSchedules,
   getLocationProfileStore,
+  getPrayerSettings,
   LOCATION_PROFILES_KEY,
   normalizeLocationProfileStore,
   saveCachedSchedule,
   saveCachedSchedules,
   saveLocationProfileStore,
+  savePrayerSettings,
   setActiveLocationProfile,
+  SETTINGS_KEY,
   upsertLocationProfile,
 } from '@/services/storage';
 import { captureLocalDataEpoch, withStorageLock } from '@/services/storageLock';
@@ -157,6 +160,59 @@ describe('location profile storage', () => {
     await expect(getLocationProfileStore()).resolves.toEqual({
       activeProfileId: 'home',
       profiles: [profile('home')],
+    });
+  });
+});
+
+describe('prayer settings storage', () => {
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+  });
+
+  test('turns fasting alarms off when the fasting routine is off', async () => {
+    const settings = await getPrayerSettings();
+    await savePrayerSettings({
+      ...settings,
+      fastingRoutine: 'off',
+      fastingAlarmsEnabled: true,
+    });
+    await expect(getPrayerSettings()).resolves.toMatchObject({
+      fastingRoutine: 'off',
+      fastingAlarmsEnabled: false,
+    });
+
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        ...settings,
+        fastingRoutine: 'off',
+        fastingAlarmsEnabled: true,
+      }),
+    );
+    await expect(getPrayerSettings()).resolves.toMatchObject({
+      fastingRoutine: 'off',
+      fastingAlarmsEnabled: false,
+    });
+  });
+
+  test('persists valid Dawud anchors and discards impossible dates', async () => {
+    const settings = await getPrayerSettings();
+    await savePrayerSettings({
+      ...settings,
+      fastingRoutine: 'dawud',
+      dawudAnchorDate: '2028-02-29',
+    });
+    await expect(getPrayerSettings()).resolves.toMatchObject({
+      fastingRoutine: 'dawud',
+      dawudAnchorDate: '2028-02-29',
+    });
+
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ ...settings, dawudAnchorDate: '2026-02-30' }),
+    );
+    await expect(getPrayerSettings()).resolves.toMatchObject({
+      dawudAnchorDate: null,
     });
   });
 });

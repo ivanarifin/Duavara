@@ -33,6 +33,16 @@ function calendarDayNumber(dateKey: string): number {
   return timestamp / 86_400_000;
 }
 
+export function isValidLocalDateKey(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    calendarDayNumber(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isFastingDate(
   dateKey: string,
   routine: FastingRoutine,

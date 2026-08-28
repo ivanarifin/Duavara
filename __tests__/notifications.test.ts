@@ -160,4 +160,23 @@ describe('native prayer notification requests', () => {
       ),
     ).toBe(true);
   });
+
+  test('does not schedule fasting alerts when the fasting routine is off', () => {
+    const notifications = buildPrayerNotificationRequests([schedule], {
+      now: new Date('2026-08-30T00:00:00.000Z'),
+      fasting: {
+        fastingRoutine: 'off',
+        fastingAlarmsEnabled: true,
+        suhoorReminderEnabled: true,
+        imsakAlarmEnabled: true,
+        dawudAnchorDate: null,
+      },
+    });
+
+    expect(
+      notifications.some(notification =>
+        notification.id.startsWith('duavara-fasting-'),
+      ),
+    ).toBe(false);
+  });
 });

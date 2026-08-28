@@ -4,6 +4,7 @@ const SIGNED_DECIMAL_INPUT = /^-?(?:\d+(?:\.\d*)?|\.\d*)?$/;
 const SIGNED_DECIMAL = /^-?(?:\d+(?:\.\d+)?|\.\d+)$/;
 const SIGNED_INTEGER_INPUT = /^-?\d*$/;
 const SIGNED_INTEGER = /^-?\d+$/;
+const UNSIGNED_INTEGER_INPUT = /^\d*$/;
 
 export function isSignedDecimalInput(value: string): boolean {
   return SIGNED_DECIMAL_INPUT.test(value);
@@ -11,6 +12,10 @@ export function isSignedDecimalInput(value: string): boolean {
 
 export function isSignedIntegerInput(value: string): boolean {
   return SIGNED_INTEGER_INPUT.test(value);
+}
+
+export function isUnsignedIntegerInput(value: string): boolean {
+  return UNSIGNED_INTEGER_INPUT.test(value);
 }
 
 export function parseSignedDecimal(value: string): number | null {
