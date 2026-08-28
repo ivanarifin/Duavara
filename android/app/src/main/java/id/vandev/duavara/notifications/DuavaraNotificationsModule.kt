@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -91,12 +92,15 @@ class DuavaraNotificationsModule(
       "allowed"
     }
     promise.resolve(
-      mapOf(
-        "notifications" to if (!notificationsEnabled) "blocked" else permissionStatus,
-        "timing" to exactAlarmStatus(),
-        "batteryOptimization" to batteryOptimizationStatus(),
-        "bootRescheduling" to "supported",
-      ),
+      Arguments.createMap().apply {
+        putString(
+          "notifications",
+          if (!notificationsEnabled) "blocked" else permissionStatus,
+        )
+        putString("timing", exactAlarmStatus())
+        putString("batteryOptimization", batteryOptimizationStatus())
+        putString("bootRescheduling", "supported")
+      },
     )
   }
 
@@ -158,7 +162,11 @@ class DuavaraNotificationsModule(
       old.forEach { PrayerAlarmScheduler.cancel(context, it.id) }
       NotificationStore.replace(context, future)
       future.forEach { notification -> PrayerAlarmScheduler.schedule(context, notification) }
-      promise.resolve(future.map { it.id })
+      promise.resolve(
+        Arguments.createArray().apply {
+          future.forEach { pushString(it.id) }
+        },
+      )
     } catch (error: Exception) {
       if (error is InvalidNotificationCategoryException) {
         promise.reject("invalid_notification_category", error.message)
