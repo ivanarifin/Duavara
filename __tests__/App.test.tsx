@@ -42,6 +42,7 @@ jest.mock('@/components', () => {
 });
 
 import App, {
+  formatLocationLabel,
   getCachedTodaySchedule,
   getCalculationKey,
   parseManualCoordinates,
@@ -78,6 +79,16 @@ test('rejects empty manual coordinate values', () => {
     latitude: 51.5,
     longitude: -0.12,
   });
+});
+
+test('prefers the resolved region in the location label', () => {
+  const coordinates = { latitude: -6.2615, longitude: 106.8106 };
+
+  expect(formatLocationLabel('South Jakarta', 'Home', coordinates)).toBe(
+    'in South Jakarta',
+  );
+  expect(formatLocationLabel(null, 'Home', coordinates)).toBe('Home');
+  expect(formatLocationLabel(null, null, coordinates)).toBe('-6.26°, 106.81°');
 });
 
 test('renders the initial splash screen', () => {

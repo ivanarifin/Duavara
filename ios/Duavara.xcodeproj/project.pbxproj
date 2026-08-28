@@ -19,6 +19,8 @@
 		6A7B8C9D0E1F2A3B4C5D6E82 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6A7B8C9D0E1F2A3B4C5D6E73 /* AVFoundation.framework */; };
 		6A7B8C9D0E1F2A3B4C5D6E83 /* adhan_full.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A7B8C9D0E1F2A3B4C5D6E74 /* adhan_full.m4a */; };
 		6A7B8C9D0E1F2A3B4C5D6E84 /* adhan_short.caf in Resources */ = {isa = PBXBuildFile; fileRef = 6A7B8C9D0E1F2A3B4C5D6E75 /* adhan_short.caf */; };
+		8C1A76A61D5E4F0A9B2C3D41 /* DuavaraLocationModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1A76A61D5E4F0A9B2C3D42 /* DuavaraLocationModule.swift */; };
+		8C1A76A61D5E4F0A9B2C3D43 /* DuavaraLocationModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 8C1A76A61D5E4F0A9B2C3D44 /* DuavaraLocationModuleBridge.m */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
@@ -40,6 +42,8 @@
 		6A7B8C9D0E1F2A3B4C5D6E73 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		6A7B8C9D0E1F2A3B4C5D6E74 /* adhan_full.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.m4a; name = adhan_full.m4a; path = Duavara/Audio/adhan_full.m4a; sourceTree = "<group>"; };
 		6A7B8C9D0E1F2A3B4C5D6E75 /* adhan_short.caf */ = {isa = PBXFileReference; lastKnownFileType = audio.caf; name = adhan_short.caf; path = Duavara/Audio/adhan_short.caf; sourceTree = "<group>"; };
+		8C1A76A61D5E4F0A9B2C3D42 /* DuavaraLocationModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DuavaraLocationModule.swift; path = Duavara/DuavaraLocationModule.swift; sourceTree = "<group>"; };
+		8C1A76A61D5E4F0A9B2C3D44 /* DuavaraLocationModuleBridge.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = DuavaraLocationModuleBridge.m; path = Duavara/DuavaraLocationModuleBridge.m; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = Duavara/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = Duavara/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
@@ -72,6 +76,8 @@
 				4F0B1D6C2C3E4A5B8C9D0E1F /* QiblaCompassModuleBridge.m */,
 				6A7B8C9D0E1F2A3B4C5D6E70 /* PrayerNotificationModule.swift */,
 				6A7B8C9D0E1F2A3B4C5D6E71 /* PrayerNotificationModuleBridge.m */,
+				8C1A76A61D5E4F0A9B2C3D42 /* DuavaraLocationModule.swift */,
+				8C1A76A61D5E4F0A9B2C3D44 /* DuavaraLocationModuleBridge.m */,
 				6A7B8C9D0E1F2A3B4C5D6E74 /* adhan_full.m4a */,
 				6A7B8C9D0E1F2A3B4C5D6E75 /* adhan_short.caf */,
 			);
@@ -283,6 +289,8 @@
 				4F0B1D7C2C3E4A5B8C9D0E1F /* QiblaCompassModuleBridge.m in Sources */,
 				6A7B8C9D0E1F2A3B4C5D6E7F /* PrayerNotificationModule.swift in Sources */,
 				6A7B8C9D0E1F2A3B4C5D6E80 /* PrayerNotificationModuleBridge.m in Sources */,
+				8C1A76A61D5E4F0A9B2C3D41 /* DuavaraLocationModule.swift in Sources */,
+				8C1A76A61D5E4F0A9B2C3D43 /* DuavaraLocationModuleBridge.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

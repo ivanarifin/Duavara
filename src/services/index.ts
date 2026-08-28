@@ -2,6 +2,7 @@ export * from '@/services/aladhan';
 export * from '@/services/compass';
 export * from '@/services/location';
 export * from '@/services/notifications';
+export * from '@/services/region';
 export * from '@/services/mosques';
 export * from '@/services/mosqueFavorites';
 export * from '@/services/quran';

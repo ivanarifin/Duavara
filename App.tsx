@@ -78,6 +78,7 @@ import {
   getDeviceLocation,
   getLocationProfileStore,
   getNotificationHealth,
+  getRegionName,
   hasNativeNotificationSupport,
   NotificationHealth,
   getPrayerSettings,
@@ -294,6 +295,20 @@ export function parseManualCoordinates(
     : null;
 }
 
+export function formatLocationLabel(
+  regionName: string | null,
+  activeProfileName: string | null,
+  coordinates: Coordinates | null,
+): string {
+  if (regionName) return `in ${regionName}`;
+  if (activeProfileName) return activeProfileName;
+  return coordinates
+    ? `${coordinates.latitude.toFixed(2)}°, ${coordinates.longitude.toFixed(
+        2,
+      )}°`
+    : 'Set your location';
+}
+
 class RootErrorBoundary extends Component<
   { children: ReactNode },
   { hasError: boolean }
@@ -358,6 +373,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     DEFAULT_PRAYER_SETTINGS,
   );
   const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
+  const [regionName, setRegionName] = useState<string | null>(null);
   const [profileStore, setProfileStore] = useState<LocationProfileStore>({
     activeProfileId: null,
     profiles: [],
@@ -398,6 +414,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       bootRescheduling: 'notApplicable',
     });
   const requestTokenRef = useRef(0);
+  const regionRequestRef = useRef(0);
   const qiblaRequestTokenRef = useRef(0);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -410,6 +427,26 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     requestTokenRef.current += 1;
     return requestTokenRef.current;
   }, []);
+
+  const coordinateLatitude = coordinates?.latitude;
+  const coordinateLongitude = coordinates?.longitude;
+  useEffect(() => {
+    const requestId = regionRequestRef.current + 1;
+    regionRequestRef.current = requestId;
+    setRegionName(null);
+    if (coordinateLatitude === undefined || coordinateLongitude === undefined)
+      return;
+    getRegionName({
+      latitude: coordinateLatitude,
+      longitude: coordinateLongitude,
+    })
+      .then(region => {
+        if (regionRequestRef.current === requestId) setRegionName(region);
+      })
+      .catch(() => {
+        if (regionRequestRef.current === requestId) setRegionName(null);
+      });
+  }, [coordinateLatitude, coordinateLongitude]);
   const isCurrentRequest = useCallback(
     (token: number) => requestTokenRef.current === token,
     [],
@@ -645,7 +682,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       try {
         await enqueueNotificationOperation(async () => {
           if (!isCurrentRequest(requestToken)) return;
-          await scheduleNotificationsNow(schedules, nextSettings);
+          await scheduleNotificationsNow(schedules, settingsRef.current);
           if (!isCurrentRequest(requestToken)) {
             await scheduleNotificationsNow(
               schedulesRef.current,
@@ -1022,7 +1059,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
 
   const applyNotificationSettings = useCallback(
     async (nextSettings: PrayerSettings, fallbackMessage: string) => {
-      const requestToken = beginRequest();
+      const requestToken = requestTokenRef.current;
       try {
         await commitNotificationSettings(nextSettings, requestToken);
       } catch (error) {
@@ -1031,7 +1068,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         }
       }
     },
-    [beginRequest, commitNotificationSettings, isCurrentRequest],
+    [commitNotificationSettings, isCurrentRequest],
   );
 
   const togglePrayerReminder = useCallback(
@@ -1050,20 +1087,19 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
 
   const toggleNotifications = useCallback(
     async (enabled: boolean) => {
-      const requestToken = beginRequest();
+      const requestToken = requestTokenRef.current;
       const nextSettings = {
         ...settingsRef.current,
         notificationsEnabled: enabled,
       };
       try {
-        if (enabled && !upcomingSchedules.length) {
-          throw new Error('Set your location before enabling reminders.');
-        }
         await commitNotificationSettings(nextSettings, requestToken);
         if (isCurrentRequest(requestToken)) {
           setMessage(
             enabled
-              ? 'Prayer reminders are scheduled for the next seven days.'
+              ? upcomingSchedules.length
+                ? 'Prayer reminders are scheduled for the next seven days.'
+                : 'Prayer reminders will schedule after prayer times load.'
               : 'Prayer reminders are paused.',
           );
         }
@@ -1074,13 +1110,14 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
               ? error.message
               : 'Unable to update reminders.',
           );
+          refreshNotificationHealth().catch(() => undefined);
         }
       }
     },
     [
-      beginRequest,
       commitNotificationSettings,
       isCurrentRequest,
+      refreshNotificationHealth,
       upcomingSchedules.length,
     ],
   );
@@ -1106,7 +1143,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
 
   const toggleFastingAlarms = useCallback(
     async (enabled: boolean) => {
-      const requestToken = beginRequest();
+      const requestToken = requestTokenRef.current;
       if (enabled && settingsRef.current.fastingRoutine === 'off') {
         setMessage('Choose a fasting routine before enabling fasting alarms.');
         return;
@@ -1116,14 +1153,13 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         fastingAlarmsEnabled: enabled,
       };
       try {
-        if (enabled && !upcomingSchedules.length) {
-          throw new Error('Set your location before enabling fasting alarms.');
-        }
         await commitNotificationSettings(nextSettings, requestToken);
         if (isCurrentRequest(requestToken)) {
           setMessage(
             enabled
-              ? 'Suhoor and Imsak alarms are scheduled for the next seven days.'
+              ? upcomingSchedules.length
+                ? 'Suhoor and Imsak alarms are scheduled for the next seven days.'
+                : 'Fasting alarms will schedule after prayer times load.'
               : 'Fasting alarms are paused.',
           );
         }
@@ -1134,13 +1170,14 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
               ? error.message
               : 'Unable to update fasting alarms.',
           );
+          refreshNotificationHealth().catch(() => undefined);
         }
       }
     },
     [
-      beginRequest,
       commitNotificationSettings,
       isCurrentRequest,
+      refreshNotificationHealth,
       upcomingSchedules.length,
     ],
   );
@@ -1454,6 +1491,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       >
         <Header
           coordinates={coordinates}
+          regionName={regionName}
           activeProfileName={activeProfile?.name ?? null}
           onSettings={() => {
             openSettings().catch(() => undefined);
@@ -1706,11 +1744,13 @@ function renderTab(props: {
 
 function Header({
   coordinates,
+  regionName,
   activeProfileName,
   onSettings,
   onLocation,
 }: {
   coordinates: Coordinates | null;
+  regionName: string | null;
   activeProfileName: string | null;
   onSettings: () => void;
   onLocation: () => void;
@@ -1727,12 +1767,7 @@ function Header({
         >
           <Text style={styles.locationDot}>●</Text>
           <Text style={styles.locationText} numberOfLines={1}>
-            {activeProfileName ??
-              (coordinates
-                ? `${coordinates.latitude.toFixed(
-                    2,
-                  )}°, ${coordinates.longitude.toFixed(2)}°`
-                : 'Set your location')}
+            {formatLocationLabel(regionName, activeProfileName, coordinates)}
           </Text>
         </Pressable>
       </View>
@@ -2883,7 +2918,9 @@ function SettingsSheet({
             <Text style={styles.settingsHint}>
               {settings.fastingRoutine === 'dawud'
                 ? 'Dawud alternates daily. Today is your fasting anchor day.'
-                : 'Choose voluntary fasting days to schedule Suhoor and Imsak.'}
+                : settings.fastingRoutine === 'off'
+                ? 'Choose Mon & Thu or Dawud above to enable fasting alarms.'
+                : 'Schedules Suhoor and Imsak for your chosen fasting days.'}
             </Text>
 
             <View style={styles.toggleRow}>

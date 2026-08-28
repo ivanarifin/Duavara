@@ -113,6 +113,7 @@ There is no `.env` file, backend, API key, or project-specific runtime configura
 - [AlAdhan API](https://aladhan.com/prayer-times-api) for prayer timings, monthly calendars, calculation methods, Qibla bearings, Hijri occasions, Islamic months, special days, and the 99 Names.
 - [AlQuran.cloud](https://alquran.cloud/api) for the surah list, Arabic Uthmani Quran text, selectable translations, translation search, and API-provided recitation streams. The reader identifies the active translator and reciter.
 - [OpenStreetMap Overpass API](https://overpass-api.de/) for nearby mosque search. The app displays OpenStreetMap attribution in the results section.
+- The Android or iOS platform geocoder for a best-effort nearby-region label in the header. It may use the platform's network-backed provider.
 
 Network-backed screens show an error and can be retried if a service is unavailable. Prayer times and Qibla require coordinates; Quran and Discover load their data when opened. The Zakat calculator and worship progress do not require a network connection after the app is installed.
 
@@ -138,7 +139,7 @@ Release artifacts must be signed. On macOS, Gradle can use `android/app/duavara-
 
 ## Native permissions and platform notes
 
-- **Location:** used for device-based prayer times, Qibla bearing, nearby mosques, and true-north compass orientation. Manual coordinates can be used for prayer times and Qibla without location permission.
+- **Location:** used for device-based prayer times, Qibla bearing, nearby mosques, true-north compass orientation, and a best-effort region label. Manual coordinates can be used without location permission; selected manual and saved coordinates may still be sent to the platform geocoder to resolve that label.
 - **Notifications:** used for prayer reminders and optional fasting alarms. Up to the next seven days are scheduled. Notification health reports the current OS permission and, on Android where available, exact-alarm and battery-optimization status; Focus, Do Not Disturb, and system settings may still affect delivery.
 - **Camera:** optional; used only by the live camera Qibla finder. The normal Qibla bearing remains available without it.
 - **Local storage:** stores preferences, saved places, per-place 30-day caches, worship progress, Tasbih state, mosque favourites/notes, Quran reading preferences, and Zakat form data on the device. No app backend or analytics service is configured.

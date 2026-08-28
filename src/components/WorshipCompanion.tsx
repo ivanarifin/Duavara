@@ -336,6 +336,7 @@ export function WorshipCompanion({
 const styles = StyleSheet.create({
   container: {
     gap: 14,
+    marginTop: 14,
   },
   summaryRow: {
     alignItems: 'center',

@@ -38,12 +38,12 @@ class DuavaraNotificationsModule(
   @ReactMethod
   fun requestPermission(promise: Promise) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-      promise.resolve(true)
+      promise.resolve(NotificationManagerCompat.from(context).areNotificationsEnabled())
       return
     }
 
     if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-      promise.resolve(true)
+      promise.resolve(NotificationManagerCompat.from(context).areNotificationsEnabled())
       return
     }
     if (permissionRequestInFlight) {
@@ -64,7 +64,10 @@ class DuavaraNotificationsModule(
         PERMISSION_REQUEST_CODE,
         PermissionListener { _, _, grantResults ->
           permissionRequestInFlight = false
-          promise.resolve(grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED)
+          promise.resolve(
+            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED &&
+              NotificationManagerCompat.from(context).areNotificationsEnabled(),
+          )
           true
         },
       )
