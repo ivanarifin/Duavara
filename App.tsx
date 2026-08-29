@@ -77,6 +77,7 @@ import {
   alAdhanClient,
   cancelFastingNotifications,
   cancelPrayerNotifications,
+  clearPrayerWidget,
   DEFAULT_PRAYER_SETTINGS,
   deleteAllLocalData,
   getCachedSchedule,
@@ -436,6 +437,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
   const schedulesRef = useRef(upcomingSchedules);
   schedulesRef.current = upcomingSchedules;
   const notificationTransactionRef = useRef<Promise<void>>(Promise.resolve());
+  const settingsTransactionRef = useRef<Promise<void>>(Promise.resolve());
   const cacheCommitRef = useRef<Promise<void>>(Promise.resolve());
   const widgetCommitRef = useRef<Promise<void>>(Promise.resolve());
   const beginRequest = useCallback(() => {
@@ -471,6 +473,10 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     setUpcomingSchedules([]);
     setMonthSchedules([]);
     setHijriDate(null);
+    const queued = widgetCommitRef.current.then(() =>
+      clearPrayerWidget().catch(() => undefined),
+    );
+    widgetCommitRef.current = queued.catch(() => undefined);
   }, []);
   const invalidateQibla = useCallback(() => {
     qiblaRequestTokenRef.current += 1;
@@ -542,6 +548,15 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     (operation: () => Promise<void>) => {
       const queued = notificationTransactionRef.current.then(operation);
       notificationTransactionRef.current = queued.catch(() => undefined);
+      return queued;
+    },
+    [],
+  );
+
+  const enqueueSettingsOperation = useCallback(
+    (operation: () => Promise<void>) => {
+      const queued = settingsTransactionRef.current.then(operation);
+      settingsTransactionRef.current = queued.catch(() => undefined);
       return queued;
     },
     [],
@@ -1006,43 +1021,42 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
   }, [methods.length, refreshNotificationHealth]);
 
   const updateSettings = useCallback(
-    async (nextSettings: PrayerSettings, refresh = false) => {
-      const requestToken = refresh ? beginRequest() : requestTokenRef.current;
+    async (
+      update: (current: PrayerSettings) => PrayerSettings,
+      refresh = false,
+    ) => {
+      let committed: PrayerSettings | undefined;
       try {
-        await savePrayerSettings(nextSettings);
-        if (!isCurrentRequest(requestToken)) return;
-        settingsRef.current = nextSettings;
-        setSettings(nextSettings);
-        if (refresh) {
-          clearPrayerSchedules();
-          invalidateQibla();
-        }
-        if (refresh && activeProfile) {
-          setIsRefreshing(true);
-          try {
-            await refreshForCoordinates(
-              activeProfile,
-              nextSettings,
-              requestToken,
-            );
-          } finally {
-            if (isCurrentRequest(requestToken)) setIsRefreshing(false);
-          }
+        await enqueueSettingsOperation(async () => {
+          const nextSettings = update(settingsRef.current);
+          await savePrayerSettings(nextSettings);
+          settingsRef.current = nextSettings;
+          setSettings(nextSettings);
+          committed = nextSettings;
+        });
+        if (!refresh || !committed || !activeProfile) return;
+        const requestToken = beginRequest();
+        clearPrayerSchedules();
+        invalidateQibla();
+        setIsRefreshing(true);
+        try {
+          await refreshForCoordinates(activeProfile, committed, requestToken);
+        } finally {
+          if (isCurrentRequest(requestToken)) setIsRefreshing(false);
         }
       } catch (error) {
-        if (isCurrentRequest(requestToken)) {
-          setMessage(
-            error instanceof Error
-              ? error.message
-              : 'Unable to apply preferences.',
-          );
-        }
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : 'Unable to apply preferences.',
+        );
       }
     },
     [
       activeProfile,
       beginRequest,
       clearPrayerSchedules,
+      enqueueSettingsOperation,
       invalidateQibla,
       isCurrentRequest,
       refreshForCoordinates,
@@ -1050,45 +1064,52 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
   );
 
   const commitNotificationSettings = useCallback(
-    async (nextSettings: PrayerSettings, requestToken: number) => {
-      return enqueueNotificationOperation(async () => {
-        if (!isCurrentRequest(requestToken)) return;
-        const previousSettings = settingsRef.current;
-        try {
-          await scheduleNotificationsNow(upcomingSchedules, nextSettings);
-          if (!isCurrentRequest(requestToken)) {
-            await scheduleNotificationsNow(
-              upcomingSchedules,
-              previousSettings,
-            ).catch(() => undefined);
-            return;
-          }
+    async (
+      update: (current: PrayerSettings) => PrayerSettings,
+      requestToken: number,
+    ) => {
+      return enqueueSettingsOperation(() =>
+        enqueueNotificationOperation(async () => {
+          if (!isCurrentRequest(requestToken)) return;
+          const previousSettings = settingsRef.current;
+          const nextSettings = update(previousSettings);
           try {
-            await savePrayerSettings(nextSettings);
+            await scheduleNotificationsNow(upcomingSchedules, nextSettings);
+            if (!isCurrentRequest(requestToken)) {
+              await scheduleNotificationsNow(
+                upcomingSchedules,
+                previousSettings,
+              ).catch(() => undefined);
+              return;
+            }
+            try {
+              await savePrayerSettings(nextSettings);
+            } catch (error) {
+              await scheduleNotificationsNow(
+                upcomingSchedules,
+                previousSettings,
+              ).catch(() => undefined);
+              await savePrayerSettings(previousSettings).catch(() => undefined);
+              throw error;
+            }
+            if (!isCurrentRequest(requestToken)) {
+              await scheduleNotificationsNow(
+                upcomingSchedules,
+                previousSettings,
+              ).catch(() => undefined);
+              return;
+            }
+            settingsRef.current = nextSettings;
+            setSettings(nextSettings);
           } catch (error) {
-            await scheduleNotificationsNow(
-              upcomingSchedules,
-              previousSettings,
-            ).catch(() => undefined);
-            await savePrayerSettings(previousSettings).catch(() => undefined);
             throw error;
           }
-          if (!isCurrentRequest(requestToken)) {
-            await scheduleNotificationsNow(
-              upcomingSchedules,
-              previousSettings,
-            ).catch(() => undefined);
-            return;
-          }
-          settingsRef.current = nextSettings;
-          setSettings(nextSettings);
-        } catch (error) {
-          throw error;
-        }
-      });
+        }),
+      );
     },
     [
       enqueueNotificationOperation,
+      enqueueSettingsOperation,
       isCurrentRequest,
       scheduleNotificationsNow,
       upcomingSchedules,
@@ -1096,10 +1117,13 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
   );
 
   const applyNotificationSettings = useCallback(
-    async (nextSettings: PrayerSettings, fallbackMessage: string) => {
+    async (
+      update: (current: PrayerSettings) => PrayerSettings,
+      fallbackMessage: string,
+    ) => {
       const requestToken = requestTokenRef.current;
       try {
-        await commitNotificationSettings(nextSettings, requestToken);
+        await commitNotificationSettings(update, requestToken);
       } catch (error) {
         if (isCurrentRequest(requestToken)) {
           setMessage(error instanceof Error ? error.message : fallbackMessage);
@@ -1111,14 +1135,13 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
 
   const togglePrayerReminder = useCallback(
     async (prayer: PrayerName, enabled: boolean) => {
-      const nextSettings = {
-        ...settingsRef.current,
-        enabledPrayers: {
-          ...settingsRef.current.enabledPrayers,
-          [prayer]: enabled,
-        },
-      };
-      await applyNotificationSettings(nextSettings, 'Reminder update failed.');
+      await applyNotificationSettings(
+        current => ({
+          ...current,
+          enabledPrayers: { ...current.enabledPrayers, [prayer]: enabled },
+        }),
+        'Reminder update failed.',
+      );
     },
     [applyNotificationSettings],
   );
@@ -1126,12 +1149,11 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
   const toggleNotifications = useCallback(
     async (enabled: boolean) => {
       const requestToken = requestTokenRef.current;
-      const nextSettings = {
-        ...settingsRef.current,
-        notificationsEnabled: enabled,
-      };
       try {
-        await commitNotificationSettings(nextSettings, requestToken);
+        await commitNotificationSettings(
+          current => ({ ...current, notificationsEnabled: enabled }),
+          requestToken,
+        );
         if (isCurrentRequest(requestToken)) {
           setMessage(
             enabled
@@ -1162,17 +1184,13 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
 
   const setFastingRoutine = useCallback(
     async (fastingRoutine: PrayerSettings['fastingRoutine']) => {
-      const currentSettings = settingsRef.current;
-      const nextSettings: PrayerSettings = {
-        ...currentSettings,
-        fastingRoutine,
-        fastingAlarmsEnabled:
-          fastingRoutine === 'off'
-            ? false
-            : currentSettings.fastingAlarmsEnabled,
-      };
       await applyNotificationSettings(
-        nextSettings,
+        current => ({
+          ...current,
+          fastingRoutine,
+          fastingAlarmsEnabled:
+            fastingRoutine === 'off' ? false : current.fastingAlarmsEnabled,
+        }),
         'Unable to update fasting routine.',
       );
     },
@@ -1182,13 +1200,15 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
   const setDawudAnchorDate = useCallback(
     async (dawudAnchorDate: string) => {
       const requestToken = requestTokenRef.current;
-      const nextSettings = {
-        ...settingsRef.current,
-        fastingRoutine: 'dawud' as const,
-        dawudAnchorDate,
-      };
       try {
-        await commitNotificationSettings(nextSettings, requestToken);
+        await commitNotificationSettings(
+          current => ({
+            ...current,
+            fastingRoutine: 'dawud',
+            dawudAnchorDate,
+          }),
+          requestToken,
+        );
         if (isCurrentRequest(requestToken)) {
           setMessage(
             'Dawud fasting anchor updated. This date is a fasting day.',
@@ -1224,12 +1244,11 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         );
         return;
       }
-      const nextSettings = {
-        ...settingsRef.current,
-        fastingAlarmsEnabled: enabled,
-      };
       try {
-        await commitNotificationSettings(nextSettings, requestToken);
+        await commitNotificationSettings(
+          current => ({ ...current, fastingAlarmsEnabled: enabled }),
+          requestToken,
+        );
         if (isCurrentRequest(requestToken)) {
           setMessage(
             enabled
@@ -1611,23 +1630,26 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         latitude={latitudeInput}
         longitude={longitudeInput}
         isBusy={isRefreshing}
+        message={message}
         onClose={() => setIsSettingsOpen(false)}
         onMethod={method => {
-          updateSettings({ ...settings, method }, true).catch(error =>
-            setMessage(
-              error instanceof Error
-                ? error.message
-                : 'Unable to update calculation method.',
-            ),
+          updateSettings(current => ({ ...current, method }), true).catch(
+            error =>
+              setMessage(
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to update calculation method.',
+              ),
           );
         }}
         onSchool={school => {
-          updateSettings({ ...settings, school }, true).catch(error =>
-            setMessage(
-              error instanceof Error
-                ? error.message
-                : 'Unable to update Asr method.',
-            ),
+          updateSettings(current => ({ ...current, school }), true).catch(
+            error =>
+              setMessage(
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to update Asr method.',
+              ),
           );
         }}
         onNotifications={enabled => {
@@ -1638,13 +1660,13 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         }}
         onAdhanEnabled={enabled => {
           applyNotificationSettings(
-            { ...settingsRef.current, adhanEnabled: enabled },
+            current => ({ ...current, adhanEnabled: enabled }),
             'Unable to update Adhan settings.',
           ).catch(() => undefined);
         }}
         onAdhanVolumeCategory={adhanVolumeCategory => {
           applyNotificationSettings(
-            { ...settingsRef.current, adhanVolumeCategory },
+            current => ({ ...current, adhanVolumeCategory }),
             'Unable to update Adhan volume.',
           ).catch(() => undefined);
         }}
@@ -1661,19 +1683,19 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         }}
         onSuhoorReminder={enabled => {
           applyNotificationSettings(
-            { ...settingsRef.current, suhoorReminderEnabled: enabled },
+            current => ({ ...current, suhoorReminderEnabled: enabled }),
             'Unable to update Suhoor reminder.',
           ).catch(() => undefined);
         }}
         onImsakAlarm={enabled => {
           applyNotificationSettings(
-            { ...settingsRef.current, imsakAlarmEnabled: enabled },
+            current => ({ ...current, imsakAlarmEnabled: enabled }),
             'Unable to update Imsak alarm.',
           ).catch(() => undefined);
         }}
         onUse24HourTime={enabled => {
           applyNotificationSettings(
-            { ...settingsRef.current, use24HourTime: enabled },
+            current => ({ ...current, use24HourTime: enabled }),
             'Unable to update time format.',
           ).catch(() => undefined);
         }}
@@ -1681,7 +1703,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
           selectLocationProfile(profileId).catch(() => undefined);
         }}
         onNewProfile={() => {
-          setEditingProfileId(null);
+          setEditingProfileId(createProfileId());
           setProfileNameInput('');
           setProfileKindInput('custom');
           setLatitudeInput('');
@@ -2683,6 +2705,7 @@ function SettingsSheet({
   latitude,
   longitude,
   isBusy,
+  message,
   onClose,
   onMethod,
   onSchool,
@@ -2729,6 +2752,7 @@ function SettingsSheet({
   latitude: string;
   longitude: string;
   isBusy: boolean;
+  message: string | null;
   onClose: () => void;
   onMethod: (method: number) => void;
   onSchool: (school: PrayerSettings['school']) => void;
@@ -2762,7 +2786,13 @@ function SettingsSheet({
   onSaveLocation: () => void;
   onDeleteAllData: () => void;
 }) {
-  const selectedMethod = methods.find(method => method.id === settings.method);
+  const methodOptions = methods.length
+    ? methods
+    : [{ id: settings.method, name: `Method ${settings.method}` }];
+  const selectedMethod = methodOptions.find(
+    method => method.id === settings.method,
+  );
+  const [isMethodPickerOpen, setIsMethodPickerOpen] = useState(false);
   const [isAdhanPreviewPlaying, setIsAdhanPreviewPlaying] = useState(false);
   const [adhanPreviewError, setAdhanPreviewError] = useState<string | null>(
     null,
@@ -2794,9 +2824,18 @@ function SettingsSheet({
   };
 
   const closeSettings = () => {
+    setIsMethodPickerOpen(false);
     onStopAdhanPreview()
       .catch(() => undefined)
       .finally(() => onClose());
+  };
+
+  const handleSettingsRequestClose = () => {
+    if (isMethodPickerOpen) {
+      setIsMethodPickerOpen(false);
+      return;
+    }
+    closeSettings();
   };
 
   const toggleAdhanPreview = () => {
@@ -2823,435 +2862,241 @@ function SettingsSheet({
       visible={isVisible}
       transparent
       animationType="slide"
-      onRequestClose={closeSettings}
+      onRequestClose={handleSettingsRequestClose}
     >
       <View style={styles.modalBackdrop}>
-        <Pressable style={styles.modalDismissArea} onPress={closeSettings} />
+        <Pressable
+          style={styles.modalDismissArea}
+          onPress={handleSettingsRequestClose}
+        />
         <View style={styles.settingsSheet}>
           <View style={styles.sheetHandle} />
-          <View style={styles.sheetHeader}>
-            <View>
-              <Text style={styles.sheetKicker}>YOUR PREFERENCES</Text>
-              <Text style={styles.sheetTitle}>Prayer settings</Text>
-            </View>
-            <Pressable
-              style={styles.closeButton}
-              onPress={closeSettings}
-              accessibilityRole="button"
-              accessibilityLabel="Close prayer settings"
-              accessibilityHint="Closes the prayer settings panel"
-            >
-              <Text style={styles.closeText}>×</Text>
-            </Pressable>
-          </View>
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.sheetScrollContent}
-          >
-            <Text style={styles.settingsLabel}>SAVED PLACES</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.methodScroller}
-            >
-              {profiles.map(profile => {
-                const selected = profile.id === activeProfileId;
-                return (
-                  <Pressable
-                    key={profile.id}
-                    style={[
-                      styles.methodChip,
-                      selected && styles.methodChipSelected,
-                    ]}
-                    onPress={() => onSelectProfile(profile.id)}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected }}
-                    accessibilityLabel={`Use ${profile.name} saved place`}
-                  >
-                    <Text
-                      style={[
-                        styles.methodChipText,
-                        selected && styles.methodChipTextSelected,
-                      ]}
-                    >
-                      {profile.name}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-              <Pressable
-                style={styles.newProfileChip}
-                onPress={onNewProfile}
-                accessibilityRole="button"
-                accessibilityLabel="Add a saved place"
-              >
-                <Text style={styles.newProfileChipText}>+ ADD PLACE</Text>
-              </Pressable>
-            </ScrollView>
-            <Text style={styles.settingsHint}>
-              Keep Home, Work, Mosque, Travel and custom places with their own
-              local calculation adjustments and cached schedules.
-            </Text>
-
-            <Text style={styles.settingsLabel}>CALCULATION METHOD</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.methodScroller}
-            >
-              {(methods.length
-                ? methods
-                : [{ id: settings.method, name: `Method ${settings.method}` }]
-              ).map(method => {
-                const isSelected = method.id === settings.method;
-                return (
-                  <Pressable
-                    key={method.id}
-                    style={[
-                      styles.methodChip,
-                      isSelected && styles.methodChipSelected,
-                    ]}
-                    onPress={() => onMethod(method.id)}
-                  >
-                    <Text
-                      style={[
-                        styles.methodChipText,
-                        isSelected && styles.methodChipTextSelected,
-                      ]}
-                    >
-                      {method.name}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <Text style={styles.settingsHint}>
-              {selectedMethod?.name ??
-                'Select a method used by your local community.'}
-            </Text>
-
-            <Text style={styles.settingsLabel}>ASR JURISTIC METHOD</Text>
-            <View style={styles.segmentedControl}>
-              {(['standard', 'hanafi'] as const).map(school => (
+          {isMethodPickerOpen ? (
+            <>
+              <View style={styles.sheetHeader}>
                 <Pressable
-                  key={school}
-                  style={[
-                    styles.segment,
-                    settings.school === school && styles.segmentSelected,
-                  ]}
-                  onPress={() => onSchool(school)}
-                >
-                  <Text
-                    style={[
-                      styles.segmentText,
-                      settings.school === school && styles.segmentTextSelected,
-                    ]}
-                  >
-                    {school === 'standard' ? 'Standard' : 'Hanafi'}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.settingsLabel}>HIGH-LATITUDE RULE</Text>
-            <View style={styles.profileOptionRow}>
-              {(
-                [
-                  ['default', 'API default'],
-                  ['angleBased', 'Angle'],
-                  ['midnight', 'Midnight'],
-                  ['oneSeventh', '1/7 night'],
-                ] as const
-              ).map(([rule, label]) => {
-                const selected = highLatitudeRule === rule;
-                return (
-                  <Pressable
-                    key={rule}
-                    style={[
-                      styles.profileOption,
-                      selected && styles.profileOptionSelected,
-                    ]}
-                    onPress={() => onHighLatitudeRule(rule)}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected }}
-                  >
-                    <Text
-                      style={[
-                        styles.profileOptionText,
-                        selected && styles.profileOptionTextSelected,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Text style={styles.settingsHint}>
-              Use your local mosque’s guidance. API default is preserved unless
-              you choose an override.
-            </Text>
-
-            <Text style={styles.settingsLabel}>FASTING ROUTINE</Text>
-            <View style={styles.segmentedControl}>
-              {(
-                [
-                  ['off', 'Off'],
-                  ['mondayThursday', 'Mon & Thu'],
-                  ['dawud', 'Dawud'],
-                ] as const
-              ).map(([routine, label]) => (
-                <Pressable
-                  key={routine}
-                  style={[
-                    styles.segment,
-                    settings.fastingRoutine === routine &&
-                      styles.segmentSelected,
-                  ]}
-                  onPress={() => onFastingRoutine(routine)}
-                >
-                  <Text
-                    style={[
-                      styles.segmentText,
-                      settings.fastingRoutine === routine &&
-                        styles.segmentTextSelected,
-                    ]}
-                  >
-                    {label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <Text style={styles.settingsHint}>
-              {settings.fastingRoutine === 'dawud'
-                ? settings.dawudAnchorDate
-                  ? `Anchor ${settings.dawudAnchorDate} is a fasting day. Dawud fasting alternates every other day.`
-                  : 'Set the date that is a fasting day to begin your Dawud cycle.'
-                : settings.fastingRoutine === 'off'
-                ? 'Choose Mon & Thu or Dawud above to enable fasting alarms.'
-                : 'Schedules Suhoor and Imsak for your chosen fasting days.'}
-            </Text>
-            {settings.fastingRoutine === 'dawud' ? (
-              <View style={styles.dawudAnchorCard}>
-                <Text style={styles.dawudAnchorTitle}>
-                  DAWUD FASTING ANCHOR
-                </Text>
-                <Text style={styles.dawudAnchorHint}>
-                  This date is a fasting day. The cycle alternates every other
-                  day from it.
-                </Text>
-                <View style={styles.dawudAnchorRow}>
-                  <View style={styles.dawudAnchorFieldYear}>
-                    <Text style={styles.dawudAnchorLabel}>YEAR</Text>
-                    <TextInput
-                      value={dawudAnchorYear}
-                      onChangeText={value => {
-                        if (isUnsignedIntegerInput(value)) {
-                          setDawudAnchorYear(value);
-                          setDawudAnchorError(null);
-                        }
-                      }}
-                      keyboardType="numeric"
-                      maxLength={4}
-                      placeholder="2026"
-                      placeholderTextColor="#8C9A8F"
-                      style={styles.dawudAnchorInput}
-                      accessibilityLabel="Dawud fasting anchor year"
-                    />
-                  </View>
-                  <View style={styles.dawudAnchorField}>
-                    <Text style={styles.dawudAnchorLabel}>MONTH</Text>
-                    <TextInput
-                      value={dawudAnchorMonth}
-                      onChangeText={value => {
-                        if (isUnsignedIntegerInput(value)) {
-                          setDawudAnchorMonth(value);
-                          setDawudAnchorError(null);
-                        }
-                      }}
-                      keyboardType="numeric"
-                      maxLength={2}
-                      placeholder="08"
-                      placeholderTextColor="#8C9A8F"
-                      style={styles.dawudAnchorInput}
-                      accessibilityLabel="Dawud fasting anchor month"
-                    />
-                  </View>
-                  <View style={styles.dawudAnchorField}>
-                    <Text style={styles.dawudAnchorLabel}>DAY</Text>
-                    <TextInput
-                      value={dawudAnchorDay}
-                      onChangeText={value => {
-                        if (isUnsignedIntegerInput(value)) {
-                          setDawudAnchorDay(value);
-                          setDawudAnchorError(null);
-                        }
-                      }}
-                      keyboardType="numeric"
-                      maxLength={2}
-                      placeholder="31"
-                      placeholderTextColor="#8C9A8F"
-                      style={styles.dawudAnchorInput}
-                      accessibilityLabel="Dawud fasting anchor day"
-                    />
-                  </View>
-                </View>
-                <Pressable
-                  style={styles.dawudAnchorSaveButton}
-                  onPress={saveDawudAnchorDate}
+                  style={styles.methodPickerBackButton}
+                  onPress={() => setIsMethodPickerOpen(false)}
                   accessibilityRole="button"
-                  accessibilityLabel="Save Dawud fasting anchor date"
-                  accessibilityHint="Sets this date as a fasting day and updates fasting alarms."
+                  accessibilityLabel="Back to prayer settings"
                 >
-                  <Text style={styles.dawudAnchorSaveText}>
-                    SAVE ANCHOR DATE
-                  </Text>
+                  <Text style={styles.methodPickerBackText}>‹ BACK</Text>
                 </Pressable>
-                {dawudAnchorError ? (
+                <Pressable
+                  style={styles.closeButton}
+                  onPress={closeSettings}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close prayer settings"
+                >
+                  <Text style={styles.closeText}>×</Text>
+                </Pressable>
+              </View>
+              <View style={styles.methodPickerHeading}>
+                <Text style={styles.sheetKicker}>PRAYER TIMES</Text>
+                <Text style={styles.sheetTitle}>Calculation method</Text>
+                <Text style={styles.settingsHint}>
+                  Select the method used by your local community.
+                </Text>
+                {message ? (
                   <Text
-                    style={styles.dawudAnchorError}
+                    style={styles.settingsInlineMessage}
                     accessibilityRole="alert"
                   >
-                    {dawudAnchorError}
+                    {message}
                   </Text>
                 ) : null}
               </View>
-            ) : null}
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextBlock}>
-                <Text style={styles.toggleTitle}>Fasting alarms</Text>
-                <Text style={styles.toggleDescription}>
-                  Suhoor reminder 30 minutes before Imsak, plus Imsak alarm.
-                </Text>
-              </View>
-              <Switch
-                value={settings.fastingAlarmsEnabled}
-                onValueChange={onFastingAlarms}
-                accessibilityLabel="Fasting alarms"
-                accessibilityHint="Schedules Suhoor and Imsak alerts"
-                accessibilityRole="switch"
-                disabled={
-                  settings.fastingRoutine === 'off' ||
-                  !nativeNotificationsAvailable
-                }
-                trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                thumbColor={COLORS.cream}
-              />
-            </View>
-            {settings.fastingAlarmsEnabled &&
-            settings.fastingRoutine !== 'off' ? (
-              <View style={styles.prayerToggleGroup}>
-                <View style={styles.prayerToggleRow}>
-                  <Text style={styles.prayerToggleLabel}>Suhoor reminder</Text>
-                  <Switch
-                    value={settings.suhoorReminderEnabled}
-                    onValueChange={onSuhoorReminder}
-                    accessibilityLabel="Suhoor reminder"
-                    accessibilityHint="Schedules a reminder before Imsak"
-                    accessibilityRole="switch"
-                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                    thumbColor={COLORS.cream}
-                  />
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.methodPickerList}
+              >
+                {methodOptions.map(method => {
+                  const isSelected = method.id === settings.method;
+                  return (
+                    <Pressable
+                      key={method.id}
+                      style={[
+                        styles.methodPickerOption,
+                        isSelected && styles.methodPickerOptionSelected,
+                      ]}
+                      onPress={() => {
+                        onMethod(method.id);
+                        setIsMethodPickerOpen(false);
+                      }}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: isSelected }}
+                      accessibilityLabel={method.name}
+                    >
+                      <Text
+                        style={[
+                          styles.methodPickerOptionText,
+                          isSelected && styles.methodPickerOptionTextSelected,
+                        ]}
+                      >
+                        {method.name}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.methodPickerCheck,
+                          !isSelected && styles.methodPickerCheckHidden,
+                        ]}
+                      >
+                        ✓
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </>
+          ) : (
+            <>
+              <View style={styles.sheetHeader}>
+                <View>
+                  <Text style={styles.sheetKicker}>YOUR PREFERENCES</Text>
+                  <Text style={styles.sheetTitle}>Prayer settings</Text>
                 </View>
-                <View style={styles.prayerToggleRow}>
-                  <Text style={styles.prayerToggleLabel}>Imsak alarm</Text>
-                  <Switch
-                    value={settings.imsakAlarmEnabled}
-                    onValueChange={onImsakAlarm}
-                    accessibilityLabel="Imsak alarm"
-                    accessibilityHint="Schedules an alarm at Imsak"
-                    accessibilityRole="switch"
-                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                    thumbColor={COLORS.cream}
-                  />
-                </View>
+                <Pressable
+                  style={styles.closeButton}
+                  onPress={closeSettings}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close prayer settings"
+                  accessibilityHint="Closes the prayer settings panel"
+                >
+                  <Text style={styles.closeText}>×</Text>
+                </Pressable>
               </View>
-            ) : null}
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextBlock}>
-                <Text style={styles.toggleTitle}>24-hour time</Text>
-                <Text style={styles.toggleDescription}>
-                  Display prayer and calendar times as 05:30 instead of 5:30 AM.
-                </Text>
-              </View>
-              <Switch
-                value={settings.use24HourTime}
-                onValueChange={onUse24HourTime}
-                accessibilityLabel="24-hour time"
-                accessibilityHint="Displays times using the 24-hour clock"
-                accessibilityRole="switch"
-                trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                thumbColor={COLORS.cream}
-              />
-            </View>
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextBlock}>
-                <Text style={styles.toggleTitle}>Prayer reminders</Text>
-                <Text style={styles.toggleDescription}>
-                  Native alerts for the next seven days.
-                </Text>
-              </View>
-              <Switch
-                value={settings.notificationsEnabled}
-                onValueChange={onNotifications}
-                disabled={!nativeNotificationsAvailable}
-                accessibilityLabel="Prayer reminders"
-                accessibilityHint="Schedules native prayer alerts"
-                accessibilityRole="switch"
-                trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                thumbColor={COLORS.cream}
-              />
-            </View>
-            {settings.notificationsEnabled ? (
-              <>
-                <View style={styles.toggleRow}>
-                  <View style={styles.toggleTextBlock}>
-                    <Text style={styles.toggleTitle}>Adhan sound</Text>
-                    <Text style={styles.toggleDescription}>
-                      Uses a bundled 28-second Adhan clip for prayer alerts.
-                      Fasting alarms keep the system sound.
-                    </Text>
-                  </View>
-                  <Switch
-                    value={settings.adhanEnabled}
-                    onValueChange={onAdhanEnabled}
-                    accessibilityLabel="Adhan sound"
-                    accessibilityHint="Uses Adhan audio for prayer alerts"
-                    accessibilityRole="switch"
-                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                    thumbColor={COLORS.cream}
-                  />
-                </View>
-                <Text style={styles.adhanVolumeLabel}>ADHAN VOLUME ROUTE</Text>
-                <View style={styles.adhanVolumeSelector}>
-                  {(
-                    [
-                      ['alarm', 'Alarm'],
-                      ['media', 'Media'],
-                      ['notification', 'Notification'],
-                    ] as const
-                  ).map(([category, label]) => {
-                    const isSelected =
-                      settings.adhanVolumeCategory === category;
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.sheetScrollContent}
+              >
+                {message ? (
+                  <Text
+                    style={styles.settingsInlineMessage}
+                    accessibilityRole="alert"
+                  >
+                    {message}
+                  </Text>
+                ) : null}
+                <Text style={styles.settingsLabel}>SAVED PLACES</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.methodScroller}
+                >
+                  {profiles.map(profile => {
+                    const selected = profile.id === activeProfileId;
                     return (
                       <Pressable
-                        key={category}
+                        key={profile.id}
                         style={[
-                          styles.adhanVolumeButton,
-                          isSelected && styles.adhanVolumeButtonSelected,
+                          styles.methodChip,
+                          selected && styles.methodChipSelected,
                         ]}
-                        onPress={() => onAdhanVolumeCategory(category)}
+                        onPress={() => onSelectProfile(profile.id)}
                         accessibilityRole="radio"
-                        accessibilityState={{ selected: isSelected }}
-                        accessibilityLabel={`${label} volume route`}
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={`Use ${profile.name} saved place`}
                       >
                         <Text
                           style={[
-                            styles.adhanVolumeButtonText,
-                            isSelected && styles.adhanVolumeButtonTextSelected,
+                            styles.methodChipText,
+                            selected && styles.methodChipTextSelected,
+                          ]}
+                        >
+                          {profile.name}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                  <Pressable
+                    style={styles.newProfileChip}
+                    onPress={onNewProfile}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add a saved place"
+                  >
+                    <Text style={styles.newProfileChipText}>+ ADD PLACE</Text>
+                  </Pressable>
+                </ScrollView>
+                <Text style={styles.settingsHint}>
+                  Keep Home, Work, Mosque, Travel and custom places with their
+                  own local calculation adjustments and cached schedules.
+                </Text>
+
+                <Text style={styles.settingsLabel}>CALCULATION METHOD</Text>
+                <Pressable
+                  style={styles.methodPickerTrigger}
+                  onPress={() => setIsMethodPickerOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose calculation method"
+                  accessibilityHint="Opens the list of prayer-time calculation methods"
+                >
+                  <View style={styles.methodPickerTriggerText}>
+                    <Text style={styles.methodPickerTriggerLabel}>
+                      CURRENT METHOD
+                    </Text>
+                    <Text
+                      style={styles.methodPickerTriggerValue}
+                      numberOfLines={1}
+                    >
+                      {selectedMethod?.name ?? `Method ${settings.method}`}
+                    </Text>
+                  </View>
+                  <Text style={styles.methodPickerChevron}>›</Text>
+                </Pressable>
+                <Text style={styles.settingsHint}>
+                  Choose the calculation method used by your local community.
+                </Text>
+
+                <Text style={styles.settingsLabel}>ASR JURISTIC METHOD</Text>
+                <View style={styles.segmentedControl}>
+                  {(['standard', 'hanafi'] as const).map(school => (
+                    <Pressable
+                      key={school}
+                      style={[
+                        styles.segment,
+                        settings.school === school && styles.segmentSelected,
+                      ]}
+                      onPress={() => onSchool(school)}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentText,
+                          settings.school === school &&
+                            styles.segmentTextSelected,
+                        ]}
+                      >
+                        {school === 'standard' ? 'Standard' : 'Hanafi'}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                <Text style={styles.settingsLabel}>HIGH-LATITUDE RULE</Text>
+                <View style={styles.profileOptionRow}>
+                  {(
+                    [
+                      ['default', 'API default'],
+                      ['angleBased', 'Angle'],
+                      ['midnight', 'Midnight'],
+                      ['oneSeventh', '1/7 night'],
+                    ] as const
+                  ).map(([rule, label]) => {
+                    const selected = highLatitudeRule === rule;
+                    return (
+                      <Pressable
+                        key={rule}
+                        style={[
+                          styles.profileOption,
+                          selected && styles.profileOptionSelected,
+                        ]}
+                        onPress={() => onHighLatitudeRule(rule)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected }}
+                      >
+                        <Text
+                          style={[
+                            styles.profileOptionText,
+                            selected && styles.profileOptionTextSelected,
                           ]}
                         >
                           {label}
@@ -3260,303 +3105,598 @@ function SettingsSheet({
                     );
                   })}
                 </View>
-                <Text style={styles.adhanVolumeHint}>
-                  Android follows this system volume. iPhone uses its standard
-                  notification audio route.
+                <Text style={styles.settingsHint}>
+                  Use your local mosque’s guidance. API default is preserved
+                  unless you choose an override.
                 </Text>
-                <View style={styles.adhanPreviewRow}>
-                  <Pressable
-                    style={styles.adhanPreviewButton}
-                    onPress={toggleAdhanPreview}
-                    accessibilityRole="button"
-                    accessibilityLabel={
-                      isAdhanPreviewPlaying
-                        ? 'Stop full Adhan preview'
-                        : 'Play full Adhan preview'
-                    }
-                  >
-                    <Text style={styles.adhanPreviewText}>
-                      {isAdhanPreviewPlaying
-                        ? 'STOP FULL PREVIEW'
-                        : 'PLAY FULL PREVIEW'}
-                    </Text>
-                  </Pressable>
-                  <Text style={styles.adhanLicenseText}>
-                    CC0 recording · source in Third Party Notices
-                  </Text>
+
+                <Text style={styles.settingsLabel}>FASTING ROUTINE</Text>
+                <View style={styles.segmentedControl}>
+                  {(
+                    [
+                      ['off', 'Off'],
+                      ['mondayThursday', 'Mon & Thu'],
+                      ['dawud', 'Dawud'],
+                    ] as const
+                  ).map(([routine, label]) => (
+                    <Pressable
+                      key={routine}
+                      style={[
+                        styles.segment,
+                        settings.fastingRoutine === routine &&
+                          styles.segmentSelected,
+                      ]}
+                      onPress={() => onFastingRoutine(routine)}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentText,
+                          settings.fastingRoutine === routine &&
+                            styles.segmentTextSelected,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </Pressable>
+                  ))}
                 </View>
-                {adhanPreviewError ? (
-                  <Text
-                    style={styles.adhanPreviewError}
-                    accessibilityRole="alert"
-                  >
-                    {adhanPreviewError}
-                  </Text>
+                <Text style={styles.settingsHint}>
+                  {settings.fastingRoutine === 'dawud'
+                    ? settings.dawudAnchorDate
+                      ? `Anchor ${settings.dawudAnchorDate} is a fasting day. Dawud fasting alternates every other day.`
+                      : 'Set the date that is a fasting day to begin your Dawud cycle.'
+                    : settings.fastingRoutine === 'off'
+                    ? 'Choose Mon & Thu or Dawud above to enable fasting alarms.'
+                    : 'Schedules Suhoor and Imsak for your chosen fasting days.'}
+                </Text>
+                {settings.fastingRoutine === 'dawud' ? (
+                  <View style={styles.dawudAnchorCard}>
+                    <Text style={styles.dawudAnchorTitle}>
+                      DAWUD FASTING ANCHOR
+                    </Text>
+                    <Text style={styles.dawudAnchorHint}>
+                      This date is a fasting day. The cycle alternates every
+                      other day from it.
+                    </Text>
+                    <View style={styles.dawudAnchorRow}>
+                      <View style={styles.dawudAnchorFieldYear}>
+                        <Text style={styles.dawudAnchorLabel}>YEAR</Text>
+                        <TextInput
+                          value={dawudAnchorYear}
+                          onChangeText={value => {
+                            if (isUnsignedIntegerInput(value)) {
+                              setDawudAnchorYear(value);
+                              setDawudAnchorError(null);
+                            }
+                          }}
+                          keyboardType="numeric"
+                          maxLength={4}
+                          placeholder="2026"
+                          placeholderTextColor="#8C9A8F"
+                          style={styles.dawudAnchorInput}
+                          accessibilityLabel="Dawud fasting anchor year"
+                        />
+                      </View>
+                      <View style={styles.dawudAnchorField}>
+                        <Text style={styles.dawudAnchorLabel}>MONTH</Text>
+                        <TextInput
+                          value={dawudAnchorMonth}
+                          onChangeText={value => {
+                            if (isUnsignedIntegerInput(value)) {
+                              setDawudAnchorMonth(value);
+                              setDawudAnchorError(null);
+                            }
+                          }}
+                          keyboardType="numeric"
+                          maxLength={2}
+                          placeholder="08"
+                          placeholderTextColor="#8C9A8F"
+                          style={styles.dawudAnchorInput}
+                          accessibilityLabel="Dawud fasting anchor month"
+                        />
+                      </View>
+                      <View style={styles.dawudAnchorField}>
+                        <Text style={styles.dawudAnchorLabel}>DAY</Text>
+                        <TextInput
+                          value={dawudAnchorDay}
+                          onChangeText={value => {
+                            if (isUnsignedIntegerInput(value)) {
+                              setDawudAnchorDay(value);
+                              setDawudAnchorError(null);
+                            }
+                          }}
+                          keyboardType="numeric"
+                          maxLength={2}
+                          placeholder="31"
+                          placeholderTextColor="#8C9A8F"
+                          style={styles.dawudAnchorInput}
+                          accessibilityLabel="Dawud fasting anchor day"
+                        />
+                      </View>
+                    </View>
+                    <Pressable
+                      style={styles.dawudAnchorSaveButton}
+                      onPress={saveDawudAnchorDate}
+                      accessibilityRole="button"
+                      accessibilityLabel="Save Dawud fasting anchor date"
+                      accessibilityHint="Sets this date as a fasting day and updates fasting alarms."
+                    >
+                      <Text style={styles.dawudAnchorSaveText}>
+                        SAVE ANCHOR DATE
+                      </Text>
+                    </Pressable>
+                    {dawudAnchorError ? (
+                      <Text
+                        style={styles.dawudAnchorError}
+                        accessibilityRole="alert"
+                      >
+                        {dawudAnchorError}
+                      </Text>
+                    ) : null}
+                  </View>
                 ) : null}
-                <View style={styles.prayerToggleGroup}>
-                  {PRAYER_NAMES.map(prayer => (
-                    <View style={styles.prayerToggleRow} key={prayer}>
-                      <Text style={styles.prayerToggleLabel}>{prayer}</Text>
+
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleTextBlock}>
+                    <Text style={styles.toggleTitle}>Fasting alarms</Text>
+                    <Text style={styles.toggleDescription}>
+                      Suhoor reminder 30 minutes before Imsak, plus Imsak alarm.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={settings.fastingAlarmsEnabled}
+                    onValueChange={onFastingAlarms}
+                    accessibilityLabel="Fasting alarms"
+                    accessibilityHint="Schedules Suhoor and Imsak alerts"
+                    accessibilityRole="switch"
+                    disabled={
+                      settings.fastingRoutine === 'off' ||
+                      !nativeNotificationsAvailable
+                    }
+                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                    thumbColor={COLORS.cream}
+                  />
+                </View>
+                {settings.fastingAlarmsEnabled &&
+                settings.fastingRoutine !== 'off' ? (
+                  <View style={styles.prayerToggleGroup}>
+                    <View style={styles.prayerToggleRow}>
+                      <Text style={styles.prayerToggleLabel}>
+                        Suhoor reminder
+                      </Text>
                       <Switch
-                        value={settings.enabledPrayers[prayer]}
-                        onValueChange={enabled =>
-                          onPrayerReminder(prayer, enabled)
-                        }
-                        accessibilityLabel={`${prayer} reminder`}
-                        accessibilityHint={`Schedules ${prayer} prayer alerts`}
+                        value={settings.suhoorReminderEnabled}
+                        onValueChange={onSuhoorReminder}
+                        accessibilityLabel="Suhoor reminder"
+                        accessibilityHint="Schedules a reminder before Imsak"
                         accessibilityRole="switch"
                         trackColor={{ false: COLORS.sand, true: COLORS.moss }}
                         thumbColor={COLORS.cream}
                       />
                     </View>
-                  ))}
-                </View>
-              </>
-            ) : null}
+                    <View style={styles.prayerToggleRow}>
+                      <Text style={styles.prayerToggleLabel}>Imsak alarm</Text>
+                      <Switch
+                        value={settings.imsakAlarmEnabled}
+                        onValueChange={onImsakAlarm}
+                        accessibilityLabel="Imsak alarm"
+                        accessibilityHint="Schedules an alarm at Imsak"
+                        accessibilityRole="switch"
+                        trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                        thumbColor={COLORS.cream}
+                      />
+                    </View>
+                  </View>
+                ) : null}
 
-            <Text style={styles.settingsLabel}>NOTIFICATION HEALTH</Text>
-            <View style={styles.healthCard} accessibilityLiveRegion="polite">
-              <HealthRow
-                label="Notifications"
-                value={notificationHealthLabel(health.notifications)}
-              />
-              {health.timing !== 'notApplicable' ? (
-                <HealthRow
-                  label="Timing"
-                  value={notificationHealthLabel(health.timing)}
-                />
-              ) : null}
-              {health.batteryOptimization !== 'notApplicable' ? (
-                <HealthRow
-                  label="Battery"
-                  value={notificationHealthLabel(health.batteryOptimization)}
-                />
-              ) : null}
-              {health.bootRescheduling === 'supported' ? (
-                <HealthRow
-                  label="After restart"
-                  value="Reschedules reminders"
-                />
-              ) : null}
-              {!nativeNotificationsAvailable ? (
-                <Text
-                  style={styles.nativeReminderUnavailable}
-                  accessibilityRole="alert"
-                >
-                  Reminders require the latest Duavara app build. Reinstall the
-                  current APK, then reopen these settings to allow
-                  notifications.
-                </Text>
-              ) : null}
-              <Text style={styles.healthHint}>
-                Focus, Do Not Disturb, and system notification settings can
-                still delay alerts.
-              </Text>
-              <View style={styles.healthActions}>
-                <Pressable
-                  style={styles.healthButton}
-                  onPress={onRefreshNotificationHealth}
-                  accessibilityRole="button"
-                  accessibilityLabel="Refresh notification health"
-                >
-                  <Text style={styles.healthButtonText}>REFRESH STATUS</Text>
-                </Pressable>
-                {health.timing === 'approximate' ? (
-                  <Pressable
-                    style={styles.healthButton}
-                    onPress={onOpenExactAlarmSettings}
-                    accessibilityRole="button"
-                    accessibilityLabel="Open exact alarm settings"
-                  >
-                    <Text style={styles.healthButtonText}>
-                      ALLOW EXACT TIME
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleTextBlock}>
+                    <Text style={styles.toggleTitle}>24-hour time</Text>
+                    <Text style={styles.toggleDescription}>
+                      Display prayer and calendar times as 05:30 instead of 5:30
+                      AM.
                     </Text>
-                  </Pressable>
-                ) : null}
-                {health.batteryOptimization === 'restricted' ? (
-                  <Pressable
-                    style={styles.healthButton}
-                    onPress={onOpenBatterySettings}
-                    accessibilityRole="button"
-                    accessibilityLabel="Open battery optimization settings"
-                  >
-                    <Text style={styles.healthButtonText}>
-                      BATTERY SETTINGS
-                    </Text>
-                  </Pressable>
-                ) : null}
-                {health.notifications === 'blocked' ? (
-                  <Pressable
-                    style={styles.healthButton}
-                    onPress={onOpenSystemSettings}
-                    accessibilityRole="button"
-                    accessibilityLabel="Open system notification settings"
-                  >
-                    <Text style={styles.healthButtonText}>SYSTEM SETTINGS</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            </View>
-
-            <Text style={styles.settingsLabel}>SAVED PLACE DETAILS</Text>
-            <Text style={styles.settingsHint}>
-              Each place keeps its own coordinates, optional timezone,
-              high-latitude rule, minute adjustments, and 30-day offline
-              timetable.
-            </Text>
-            <TextInput
-              value={profileNameValue}
-              onChangeText={onProfileName}
-              placeholder="Place name, e.g. Home"
-              placeholderTextColor="#8C9A8F"
-              style={styles.profileTextInput}
-              maxLength={40}
-              accessibilityLabel="Saved place name"
-            />
-            <View style={styles.profileOptionRow}>
-              {(
-                [
-                  ['home', 'Home'],
-                  ['work', 'Work'],
-                  ['mosque', 'Mosque'],
-                  ['travel', 'Travel'],
-                  ['custom', 'Custom'],
-                ] as const
-              ).map(([kind, label]) => {
-                const selected = profileKindValue === kind;
-                return (
-                  <Pressable
-                    key={kind}
-                    style={[
-                      styles.profileOption,
-                      selected && styles.profileOptionSelected,
-                    ]}
-                    onPress={() => onProfileKind(kind)}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected }}
-                    accessibilityLabel={`${label} place type`}
-                  >
-                    <Text
-                      style={[
-                        styles.profileOptionText,
-                        selected && styles.profileOptionTextSelected,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <View style={styles.coordinateRow}>
-              <View style={styles.coordinateField}>
-                <Text style={styles.coordinateLabel}>LATITUDE</Text>
-                <TextInput
-                  value={latitude}
-                  onChangeText={value => {
-                    if (isSignedDecimalInput(value)) onLatitude(value);
-                  }}
-                  keyboardType={
-                    Platform.OS === 'android'
-                      ? 'numeric'
-                      : 'numbers-and-punctuation'
-                  }
-                  placeholder="e.g. 51.5074"
-                  placeholderTextColor="#8C9A8F"
-                  style={styles.coordinateInput}
-                  accessibilityLabel="Latitude"
-                />
-              </View>
-              <View style={styles.coordinateField}>
-                <Text style={styles.coordinateLabel}>LONGITUDE</Text>
-                <TextInput
-                  value={longitude}
-                  onChangeText={value => {
-                    if (isSignedDecimalInput(value)) onLongitude(value);
-                  }}
-                  keyboardType={
-                    Platform.OS === 'android'
-                      ? 'numeric'
-                      : 'numbers-and-punctuation'
-                  }
-                  placeholder="e.g. -0.1278"
-                  placeholderTextColor="#8C9A8F"
-                  style={styles.coordinateInput}
-                  accessibilityLabel="Longitude"
-                />
-              </View>
-            </View>
-            <Text style={styles.coordinateLabel}>
-              TIMEZONE OVERRIDE (OPTIONAL)
-            </Text>
-            <TextInput
-              value={timezoneValue}
-              onChangeText={onTimezone}
-              autoCapitalize="none"
-              placeholder="e.g. Europe/London"
-              placeholderTextColor="#8C9A8F"
-              style={styles.profileTextInput}
-              accessibilityLabel="IANA timezone override"
-            />
-            <Text style={styles.settingsLabel}>LOCAL MINUTE ADJUSTMENTS</Text>
-            <Text style={styles.settingsHint}>
-              Use only when your local masjid timetable differs. Set 0 to keep
-              the API time.
-            </Text>
-            <View style={styles.adjustmentRow}>
-              {PRAYER_NAMES.map(prayer => (
-                <View key={prayer} style={styles.adjustmentField}>
-                  <Text style={styles.adjustmentLabel}>{prayer}</Text>
-                  <TextInput
-                    value={profileAdjustments[prayer]}
-                    onChangeText={value => {
-                      if (isSignedIntegerInput(value))
-                        onAdjustment(prayer, value);
-                    }}
-                    keyboardType={
-                      Platform.OS === 'android'
-                        ? 'numeric'
-                        : 'numbers-and-punctuation'
-                    }
-                    style={styles.adjustmentInput}
-                    accessibilityLabel={`${prayer} minute adjustment`}
+                  </View>
+                  <Switch
+                    value={settings.use24HourTime}
+                    onValueChange={onUse24HourTime}
+                    accessibilityLabel="24-hour time"
+                    accessibilityHint="Displays times using the 24-hour clock"
+                    accessibilityRole="switch"
+                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                    thumbColor={COLORS.cream}
                   />
                 </View>
-              ))}
-            </View>
-            <Pressable
-              style={[
-                styles.saveLocationButton,
-                isBusy && styles.saveLocationButtonDisabled,
-              ]}
-              onPress={onSaveLocation}
-              disabled={isBusy}
-              accessibilityRole="button"
-              accessibilityLabel="Save place and update prayer times"
-            >
-              <Text style={styles.saveLocationText}>
-                {isBusy ? 'UPDATING…' : 'SAVE PLACE & UPDATE TIMES'}
-              </Text>
-            </Pressable>
 
-            <Text style={styles.settingsLabel}>PRIVACY</Text>
-            <Text style={styles.settingsHint}>
-              Delete all locally stored app data, including saved places, prayer
-              caches, worship progress, Quran downloads, mosque notes, Zakat
-              data, and scheduled reminders.
-            </Text>
-            <Pressable
-              style={styles.deleteDataButton}
-              onPress={onDeleteAllData}
-              disabled={isBusy}
-              accessibilityRole="button"
-              accessibilityLabel="Delete all local data"
-            >
-              <Text style={styles.deleteDataButtonText}>
-                DELETE ALL LOCAL DATA
-              </Text>
-            </Pressable>
-          </ScrollView>
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleTextBlock}>
+                    <Text style={styles.toggleTitle}>Prayer reminders</Text>
+                    <Text style={styles.toggleDescription}>
+                      Native alerts for the next seven days.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={settings.notificationsEnabled}
+                    onValueChange={onNotifications}
+                    disabled={!nativeNotificationsAvailable}
+                    accessibilityLabel="Prayer reminders"
+                    accessibilityHint="Schedules native prayer alerts"
+                    accessibilityRole="switch"
+                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                    thumbColor={COLORS.cream}
+                  />
+                </View>
+                {settings.notificationsEnabled ? (
+                  <>
+                    <View style={styles.toggleRow}>
+                      <View style={styles.toggleTextBlock}>
+                        <Text style={styles.toggleTitle}>Adhan sound</Text>
+                        <Text style={styles.toggleDescription}>
+                          Uses a bundled 28-second Adhan clip for prayer alerts.
+                          Fasting alarms keep the system sound.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={settings.adhanEnabled}
+                        onValueChange={onAdhanEnabled}
+                        accessibilityLabel="Adhan sound"
+                        accessibilityHint="Uses Adhan audio for prayer alerts"
+                        accessibilityRole="switch"
+                        trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                        thumbColor={COLORS.cream}
+                      />
+                    </View>
+                    <Text style={styles.adhanVolumeLabel}>
+                      ADHAN VOLUME ROUTE
+                    </Text>
+                    <View style={styles.adhanVolumeSelector}>
+                      {(
+                        [
+                          ['alarm', 'Alarm'],
+                          ['media', 'Media'],
+                          ['notification', 'Notification'],
+                        ] as const
+                      ).map(([category, label]) => {
+                        const isSelected =
+                          settings.adhanVolumeCategory === category;
+                        return (
+                          <Pressable
+                            key={category}
+                            style={[
+                              styles.adhanVolumeButton,
+                              isSelected && styles.adhanVolumeButtonSelected,
+                            ]}
+                            onPress={() => onAdhanVolumeCategory(category)}
+                            accessibilityRole="radio"
+                            accessibilityState={{ selected: isSelected }}
+                            accessibilityLabel={`${label} volume route`}
+                          >
+                            <Text
+                              style={[
+                                styles.adhanVolumeButtonText,
+                                isSelected &&
+                                  styles.adhanVolumeButtonTextSelected,
+                              ]}
+                            >
+                              {label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    <Text style={styles.adhanVolumeHint}>
+                      Android follows this system volume. iPhone uses its
+                      standard notification audio route.
+                    </Text>
+                    <View style={styles.adhanPreviewRow}>
+                      <Pressable
+                        style={styles.adhanPreviewButton}
+                        onPress={toggleAdhanPreview}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          isAdhanPreviewPlaying
+                            ? 'Stop full Adhan preview'
+                            : 'Play full Adhan preview'
+                        }
+                      >
+                        <Text style={styles.adhanPreviewText}>
+                          {isAdhanPreviewPlaying
+                            ? 'STOP FULL PREVIEW'
+                            : 'PLAY FULL PREVIEW'}
+                        </Text>
+                      </Pressable>
+                      <Text style={styles.adhanLicenseText}>
+                        CC0 recording · source in Third Party Notices
+                      </Text>
+                    </View>
+                    {adhanPreviewError ? (
+                      <Text
+                        style={styles.adhanPreviewError}
+                        accessibilityRole="alert"
+                      >
+                        {adhanPreviewError}
+                      </Text>
+                    ) : null}
+                    <View style={styles.prayerToggleGroup}>
+                      {PRAYER_NAMES.map(prayer => (
+                        <View style={styles.prayerToggleRow} key={prayer}>
+                          <Text style={styles.prayerToggleLabel}>{prayer}</Text>
+                          <Switch
+                            value={settings.enabledPrayers[prayer]}
+                            onValueChange={enabled =>
+                              onPrayerReminder(prayer, enabled)
+                            }
+                            accessibilityLabel={`${prayer} reminder`}
+                            accessibilityHint={`Schedules ${prayer} prayer alerts`}
+                            accessibilityRole="switch"
+                            trackColor={{
+                              false: COLORS.sand,
+                              true: COLORS.moss,
+                            }}
+                            thumbColor={COLORS.cream}
+                          />
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                ) : null}
+
+                <Text style={styles.settingsLabel}>NOTIFICATION HEALTH</Text>
+                <View
+                  style={styles.healthCard}
+                  accessibilityLiveRegion="polite"
+                >
+                  <HealthRow
+                    label="Notifications"
+                    value={notificationHealthLabel(health.notifications)}
+                  />
+                  {health.timing !== 'notApplicable' ? (
+                    <HealthRow
+                      label="Timing"
+                      value={notificationHealthLabel(health.timing)}
+                    />
+                  ) : null}
+                  {health.batteryOptimization !== 'notApplicable' ? (
+                    <HealthRow
+                      label="Battery"
+                      value={notificationHealthLabel(
+                        health.batteryOptimization,
+                      )}
+                    />
+                  ) : null}
+                  {health.bootRescheduling === 'supported' ? (
+                    <HealthRow
+                      label="After restart"
+                      value="Reschedules reminders"
+                    />
+                  ) : null}
+                  {!nativeNotificationsAvailable ? (
+                    <Text
+                      style={styles.nativeReminderUnavailable}
+                      accessibilityRole="alert"
+                    >
+                      Reminders require the latest Duavara app build. Reinstall
+                      the current APK, then reopen these settings to allow
+                      notifications.
+                    </Text>
+                  ) : null}
+                  <Text style={styles.healthHint}>
+                    Focus, Do Not Disturb, and system notification settings can
+                    still delay alerts.
+                  </Text>
+                  <View style={styles.healthActions}>
+                    <Pressable
+                      style={styles.healthButton}
+                      onPress={onRefreshNotificationHealth}
+                      accessibilityRole="button"
+                      accessibilityLabel="Refresh notification health"
+                    >
+                      <Text style={styles.healthButtonText}>
+                        REFRESH STATUS
+                      </Text>
+                    </Pressable>
+                    {health.timing === 'approximate' ? (
+                      <Pressable
+                        style={styles.healthButton}
+                        onPress={onOpenExactAlarmSettings}
+                        accessibilityRole="button"
+                        accessibilityLabel="Open exact alarm settings"
+                      >
+                        <Text style={styles.healthButtonText}>
+                          ALLOW EXACT TIME
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    {health.batteryOptimization === 'restricted' ? (
+                      <Pressable
+                        style={styles.healthButton}
+                        onPress={onOpenBatterySettings}
+                        accessibilityRole="button"
+                        accessibilityLabel="Open battery optimization settings"
+                      >
+                        <Text style={styles.healthButtonText}>
+                          BATTERY SETTINGS
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    {health.notifications === 'blocked' ? (
+                      <Pressable
+                        style={styles.healthButton}
+                        onPress={onOpenSystemSettings}
+                        accessibilityRole="button"
+                        accessibilityLabel="Open system notification settings"
+                      >
+                        <Text style={styles.healthButtonText}>
+                          SYSTEM SETTINGS
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+
+                <Text style={styles.settingsLabel}>SAVED PLACE DETAILS</Text>
+                <Text style={styles.settingsHint}>
+                  Each place keeps its own coordinates, optional timezone,
+                  high-latitude rule, minute adjustments, and 30-day offline
+                  timetable.
+                </Text>
+                <TextInput
+                  value={profileNameValue}
+                  onChangeText={onProfileName}
+                  placeholder="Place name, e.g. Home"
+                  placeholderTextColor="#8C9A8F"
+                  style={styles.profileTextInput}
+                  maxLength={40}
+                  accessibilityLabel="Saved place name"
+                />
+                <View style={styles.profileOptionRow}>
+                  {(
+                    [
+                      ['home', 'Home'],
+                      ['work', 'Work'],
+                      ['mosque', 'Mosque'],
+                      ['travel', 'Travel'],
+                      ['custom', 'Custom'],
+                    ] as const
+                  ).map(([kind, label]) => {
+                    const selected = profileKindValue === kind;
+                    return (
+                      <Pressable
+                        key={kind}
+                        style={[
+                          styles.profileOption,
+                          selected && styles.profileOptionSelected,
+                        ]}
+                        onPress={() => onProfileKind(kind)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={`${label} place type`}
+                      >
+                        <Text
+                          style={[
+                            styles.profileOptionText,
+                            selected && styles.profileOptionTextSelected,
+                          ]}
+                        >
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <View style={styles.coordinateRow}>
+                  <View style={styles.coordinateField}>
+                    <Text style={styles.coordinateLabel}>LATITUDE</Text>
+                    <TextInput
+                      value={latitude}
+                      onChangeText={value => {
+                        if (isSignedDecimalInput(value)) onLatitude(value);
+                      }}
+                      keyboardType={
+                        Platform.OS === 'android'
+                          ? 'numeric'
+                          : 'numbers-and-punctuation'
+                      }
+                      placeholder="e.g. 51.5074"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.coordinateInput}
+                      accessibilityLabel="Latitude"
+                    />
+                  </View>
+                  <View style={styles.coordinateField}>
+                    <Text style={styles.coordinateLabel}>LONGITUDE</Text>
+                    <TextInput
+                      value={longitude}
+                      onChangeText={value => {
+                        if (isSignedDecimalInput(value)) onLongitude(value);
+                      }}
+                      keyboardType={
+                        Platform.OS === 'android'
+                          ? 'numeric'
+                          : 'numbers-and-punctuation'
+                      }
+                      placeholder="e.g. -0.1278"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.coordinateInput}
+                      accessibilityLabel="Longitude"
+                    />
+                  </View>
+                </View>
+                <Text style={styles.coordinateLabel}>
+                  TIMEZONE OVERRIDE (OPTIONAL)
+                </Text>
+                <TextInput
+                  value={timezoneValue}
+                  onChangeText={onTimezone}
+                  autoCapitalize="none"
+                  placeholder="e.g. Europe/London"
+                  placeholderTextColor="#8C9A8F"
+                  style={styles.profileTextInput}
+                  accessibilityLabel="IANA timezone override"
+                />
+                <Text style={styles.settingsLabel}>
+                  LOCAL MINUTE ADJUSTMENTS
+                </Text>
+                <Text style={styles.settingsHint}>
+                  Use only when your local masjid timetable differs. Set 0 to
+                  keep the API time.
+                </Text>
+                <View style={styles.adjustmentRow}>
+                  {PRAYER_NAMES.map(prayer => (
+                    <View key={prayer} style={styles.adjustmentField}>
+                      <Text style={styles.adjustmentLabel}>{prayer}</Text>
+                      <TextInput
+                        value={profileAdjustments[prayer]}
+                        onChangeText={value => {
+                          if (isSignedIntegerInput(value))
+                            onAdjustment(prayer, value);
+                        }}
+                        keyboardType={
+                          Platform.OS === 'android'
+                            ? 'numeric'
+                            : 'numbers-and-punctuation'
+                        }
+                        style={styles.adjustmentInput}
+                        accessibilityLabel={`${prayer} minute adjustment`}
+                      />
+                    </View>
+                  ))}
+                </View>
+                <Pressable
+                  style={[
+                    styles.saveLocationButton,
+                    isBusy && styles.saveLocationButtonDisabled,
+                  ]}
+                  onPress={onSaveLocation}
+                  disabled={isBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save place and update prayer times"
+                >
+                  <Text style={styles.saveLocationText}>
+                    {isBusy ? 'UPDATING…' : 'SAVE PLACE & UPDATE TIMES'}
+                  </Text>
+                </Pressable>
+
+                <Text style={styles.settingsLabel}>PRIVACY</Text>
+                <Text style={styles.settingsHint}>
+                  Delete all locally stored app data, including saved places,
+                  prayer caches, worship progress, Quran downloads, mosque
+                  notes, Zakat data, and scheduled reminders.
+                </Text>
+                <Pressable
+                  style={styles.deleteDataButton}
+                  onPress={onDeleteAllData}
+                  disabled={isBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete all local data"
+                >
+                  <Text style={styles.deleteDataButtonText}>
+                    DELETE ALL LOCAL DATA
+                  </Text>
+                </Pressable>
+              </ScrollView>
+            </>
+          )}
         </View>
       </View>
     </Modal>
@@ -4537,6 +4677,45 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   closeText: { color: COLORS.ink, fontSize: 23, lineHeight: 25 },
+  methodPickerBackButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 36,
+    paddingHorizontal: 3,
+  },
+  methodPickerBackText: {
+    color: COLORS.moss,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
+  methodPickerHeading: { paddingBottom: 14 },
+  methodPickerList: { gap: 8, paddingBottom: 38 },
+  methodPickerOption: {
+    alignItems: 'center',
+    backgroundColor: COLORS.cream,
+    borderColor: '#D6C9AD',
+    borderRadius: 13,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 56,
+    paddingHorizontal: 15,
+  },
+  methodPickerOptionSelected: {
+    backgroundColor: COLORS.ink,
+    borderColor: COLORS.ink,
+  },
+  methodPickerOptionText: {
+    color: COLORS.inkSoft,
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    paddingRight: 12,
+  },
+  methodPickerOptionTextSelected: { color: COLORS.cream },
+  methodPickerCheck: { color: COLORS.gold, fontSize: 19, fontWeight: '900' },
+  methodPickerCheckHidden: { opacity: 0 },
   sheetScrollContent: { paddingBottom: 38 },
   settingsLabel: {
     color: COLORS.inkSoft,
@@ -4547,6 +4726,31 @@ const styles = StyleSheet.create({
     marginBottom: 9,
   },
   methodScroller: { gap: 8, paddingRight: 20 },
+  methodPickerTrigger: {
+    alignItems: 'center',
+    backgroundColor: COLORS.cream,
+    borderColor: '#D6C9AD',
+    borderRadius: 13,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 56,
+    paddingHorizontal: 15,
+  },
+  methodPickerTriggerText: { flex: 1, paddingRight: 12 },
+  methodPickerTriggerLabel: {
+    color: COLORS.moss,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  methodPickerTriggerValue: {
+    color: COLORS.inkSoft,
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  methodPickerChevron: { color: COLORS.moss, fontSize: 28, lineHeight: 30 },
   newProfileChip: {
     alignItems: 'center',
     borderColor: COLORS.moss,
@@ -4574,6 +4778,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     marginTop: 8,
+  },
+  settingsInlineMessage: {
+    backgroundColor: 'rgba(162, 59, 40, 0.10)',
+    borderColor: 'rgba(162, 59, 40, 0.32)',
+    borderRadius: 10,
+    borderWidth: 1,
+    color: '#8D321F',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 8,
+    padding: 10,
   },
   profileTextInput: {
     backgroundColor: COLORS.cream,

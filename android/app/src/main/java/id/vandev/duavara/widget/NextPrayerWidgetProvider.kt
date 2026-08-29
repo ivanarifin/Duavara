@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.widget.RemoteViews
 import id.vandev.duavara.MainActivity
 import id.vandev.duavara.R
@@ -19,12 +20,20 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
     appWidgetIds: IntArray,
   ) {
     render(context, appWidgetManager, appWidgetIds)
-    scheduleRefresh(context)
+    if (appWidgetIds.isNotEmpty()) scheduleRefresh(context)
+  }
+
+  override fun onAppWidgetOptionsChanged(
+    context: Context,
+    appWidgetManager: AppWidgetManager,
+    appWidgetId: Int,
+    newOptions: Bundle,
+  ) {
+    render(context, appWidgetManager, intArrayOf(appWidgetId))
   }
 
   override fun onEnabled(context: Context) {
-    renderAll(context)
-    scheduleRefresh(context)
+    if (renderAll(context)) scheduleRefresh(context)
   }
 
   override fun onDisabled(context: Context) {
@@ -38,8 +47,11 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
       Intent.ACTION_DATE_CHANGED,
       Intent.ACTION_TIME_CHANGED,
       Intent.ACTION_TIMEZONE_CHANGED -> {
-        renderAll(context)
-        scheduleRefresh(context)
+        if (renderAll(context)) {
+          scheduleRefresh(context)
+        } else {
+          alarmManager(context).cancel(refreshPendingIntent(context))
+        }
       }
     }
   }
@@ -47,16 +59,21 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
   companion object {
 
     fun refresh(context: Context) {
-      renderAll(context)
-      scheduleRefresh(context)
+      if (renderAll(context)) {
+        scheduleRefresh(context)
+      } else {
+        alarmManager(context).cancel(refreshPendingIntent(context))
+      }
     }
 
-    private fun renderAll(context: Context) {
+    private fun renderAll(context: Context): Boolean {
       val manager = AppWidgetManager.getInstance(context)
       val ids = manager.getAppWidgetIds(
         ComponentName(context, NextPrayerWidgetProvider::class.java),
       )
-      if (ids.isNotEmpty()) render(context, manager, ids)
+      if (ids.isEmpty()) return false
+      render(context, manager, ids)
+      return true
     }
 
     private fun render(
@@ -65,14 +82,30 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
       ids: IntArray,
     ) {
       val nextPrayer = PrayerWidgetStore.nextPrayer(context)
-      val views = RemoteViews(context.packageName, R.layout.widget_next_prayer)
+      val location = PrayerWidgetStore.locationLabel(context) ?: "Set location in Duavara"
+      ids.forEach { id ->
+        manager.updateAppWidget(
+          id,
+          createViews(
+            context,
+            widgetSize(manager.getAppWidgetOptions(id)),
+            nextPrayer,
+            location,
+          ),
+        )
+      }
+    }
+
+    private fun createViews(
+      context: Context,
+      size: WidgetSize,
+      nextPrayer: WidgetPrayer?,
+      location: String,
+    ): RemoteViews {
+      val views = RemoteViews(context.packageName, size.layoutResource)
       views.setOnClickPendingIntent(R.id.widget_root, appPendingIntent(context))
       views.setTextViewText(R.id.widget_label, "NEXT PRAYER")
-      views.setTextViewText(
-        R.id.widget_location,
-        PrayerWidgetStore.locationLabel(context) ?: "Set location in Duavara",
-      )
-
+      views.setTextViewText(R.id.widget_location, location)
       if (nextPrayer == null) {
         views.setTextViewText(R.id.widget_prayer_name, "Open Duavara")
         views.setTextViewText(R.id.widget_prayer_time, "Refresh")
@@ -80,7 +113,23 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
         views.setTextViewText(R.id.widget_prayer_name, nextPrayer.name)
         views.setTextViewText(R.id.widget_prayer_time, nextPrayer.time)
       }
-      manager.updateAppWidget(ids, views)
+      return views
+    }
+
+    private fun widgetSize(options: Bundle): WidgetSize {
+      val width = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+      val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+      return when {
+        width >= STANDARD_WIDTH_DP && height >= EXPANDED_HEIGHT_DP -> WidgetSize.EXPANDED
+        width >= STANDARD_WIDTH_DP && height >= STANDARD_HEIGHT_DP -> WidgetSize.STANDARD
+        else -> WidgetSize.COMPACT
+      }
+    }
+
+    private enum class WidgetSize(val layoutResource: Int) {
+      COMPACT(R.layout.widget_next_prayer_compact),
+      STANDARD(R.layout.widget_next_prayer),
+      EXPANDED(R.layout.widget_next_prayer_expanded),
     }
 
     private fun scheduleRefresh(context: Context) {
@@ -117,6 +166,10 @@ class NextPrayerWidgetProvider : AppWidgetProvider() {
         Intent(context, WidgetRefreshReceiver::class.java),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
+
+    private const val STANDARD_WIDTH_DP = 270
+    private const val STANDARD_HEIGHT_DP = 144
+    private const val EXPANDED_HEIGHT_DP = 180
 
     private fun appPendingIntent(context: Context): PendingIntent =
       PendingIntent.getActivity(

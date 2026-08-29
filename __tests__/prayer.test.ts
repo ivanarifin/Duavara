@@ -49,7 +49,10 @@ describe('prayer utilities', () => {
 
   test('uses the selected 12-hour or 24-hour clock format', () => {
     expect(formatPrayerTime('05:07', true)).toBe('05:07');
+    expect(formatPrayerTime('5:07', true)).toBe('05:07');
+    expect(formatPrayerTime(' 5:07 (UTC+3) ', true)).toBe('05:07');
     expect(formatPrayerTime('17:07', false)).toBe('5:07 PM');
+    expect(formatPrayerTime('5:07', false)).toBe('5:07 AM');
   });
 
   test('formats a complete prayer schedule for sharing', () => {

@@ -61,10 +61,11 @@ export function parseLocalPrayerDate(date: string | Date, time: unknown): Date {
 }
 
 export function formatPrayerTime(time: string, use24HourTime: boolean): string {
-  if (use24HourTime) return time;
-  const [hourText, minute] = time.split(':');
+  const normalized = stripTimezoneText(time);
+  if (!normalized) return time;
+  if (use24HourTime) return normalized;
+  const [hourText, minute] = normalized.split(':');
   const hour = Number(hourText);
-  if (!Number.isFinite(hour) || !minute) return time;
   return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
 }
 

@@ -183,7 +183,7 @@ function createPrayerReminders(
         {
           id: `${PRAYER_NOTIFICATION_ID_PREFIX}${formatLocalDateKey(
             prayer.date,
-          )}-${prayer.name.toLowerCase()}`,
+          )}-${prayer.name.toLowerCase()}-${prayer.date.getTime()}`,
           title: prayer.name,
           body: adhanEnabled
             ? `Adhan for ${prayer.name} · ${formatPrayerTime(
@@ -213,7 +213,9 @@ function createFastingReminders(
   return getFastingAlarms(schedules, fasting, now).map(alarm => {
     const isSuhoor = alarm.kind === 'suhoor';
     return {
-      id: `${FASTING_NOTIFICATION_ID_PREFIX}${alarm.date}-${alarm.kind}`,
+      id: `${FASTING_NOTIFICATION_ID_PREFIX}${alarm.date}-${
+        alarm.kind
+      }-${alarm.at.getTime()}`,
       title: isSuhoor ? 'Suhoor reminder' : 'Imsak',
       body: isSuhoor
         ? `Suhoor ends at Imsak, ${formatPrayerTime(
