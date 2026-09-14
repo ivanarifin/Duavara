@@ -246,6 +246,100 @@ describe('QuranClient', () => {
     );
   });
 
+  test('searches related English terms, ignores substring noise, and dedupes verses', async () => {
+    const greedMatch = {
+      number: 1026,
+      text: 'Stinginess and miserliness can corrupt the soul.',
+      edition: {
+        identifier: 'en.sahih',
+        language: 'en',
+        name: 'Saheeh International',
+        englishName: 'Saheeh International',
+        type: 'translation',
+      },
+      surah: { ...summary, number: 59 },
+      numberInSurah: 9,
+    };
+    const greedyMatch = {
+      ...greedMatch,
+      number: 96,
+      text: 'You will find them the greediest of people for life.',
+      surah: { ...summary, number: 2 },
+      numberInSurah: 96,
+    };
+    const falsePositive = {
+      ...greedMatch,
+      number: 15,
+      text: 'They agreed to conceal him in the well.',
+      surah: { ...summary, number: 12 },
+      numberInSurah: 15,
+    };
+    const fetchMock = jest.fn() as jest.MockedFunction<typeof fetch>;
+    const response = (matches: unknown[]) =>
+      ({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          code: 200,
+          status: 'OK',
+          data: { count: matches.length, matches },
+        }),
+      } as unknown as Response);
+    fetchMock
+      .mockResolvedValueOnce(response([falsePositive, greedyMatch]))
+      .mockResolvedValueOnce(response([greedMatch]))
+      .mockResolvedValueOnce(response([greedMatch]))
+      .mockResolvedValueOnce(response([]));
+    const client = new QuranClient({ baseUrl, fetchImpl: fetchMock });
+
+    await expect(client.searchRelated('Greed')).resolves.toEqual({
+      code: 200,
+      status: 'OK',
+      data: { count: 2, matches: [greedyMatch, greedMatch] },
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${baseUrl}/search/Greed/all/en.sahih?offset=0&limit=20`,
+      `${baseUrl}/search/stinginess/all/en.sahih?offset=0&limit=20`,
+      `${baseUrl}/search/miserliness/all/en.sahih?offset=0&limit=20`,
+      `${baseUrl}/search/covet/all/en.sahih?offset=0&limit=20`,
+    ]);
+  });
+
+  test('keeps topic searches literal for non-English editions', async () => {
+    const searchMatch = {
+      number: 1,
+      text: 'Terjemahan terkait keserakahan.',
+      edition: {
+        identifier: 'id.indonesian',
+        language: 'id',
+        name: 'Indonesian',
+        englishName: 'Indonesian',
+        type: 'translation',
+      },
+      surah: summary,
+      numberInSurah: 1,
+    };
+    const { client, fetchMock } = createClient({
+      body: {
+        code: 200,
+        status: 'OK',
+        data: { count: 1, matches: [searchMatch] },
+      },
+    });
+
+    await expect(
+      client.searchRelated('keserakahan', 'id.indonesian'),
+    ).resolves.toEqual({
+      code: 200,
+      status: 'OK',
+      data: { count: 1, matches: [searchMatch] },
+    });
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `${baseUrl}/search/keserakahan/all/id.indonesian?offset=0&limit=20`,
+    );
+  });
+
   test('validates edition identifiers, search queries, and search limits', () => {
     const { client, fetchMock } = createClient({
       body: { code: 200, status: 'OK', data: detail },

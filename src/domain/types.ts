@@ -61,7 +61,7 @@ export interface CachedScheduleSet {
 }
 
 export interface PrayerSettings {
-  method: number;
+  method: number | null;
   school: PrayerSchool;
   notificationsEnabled: boolean;
   adhanEnabled: boolean;

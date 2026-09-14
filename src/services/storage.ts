@@ -28,7 +28,7 @@ const MAX_LOCATION_PROFILES = 12;
 const MAX_PROFILE_NAME_LENGTH = 40;
 
 export const DEFAULT_PRAYER_SETTINGS: PrayerSettings = {
-  method: 3,
+  method: null,
   school: 'standard',
   notificationsEnabled: false,
   adhanEnabled: false,
@@ -55,6 +55,7 @@ function settingsFromUnknown(value: unknown): PrayerSettings {
       enabledPrayers: { ...DEFAULT_PRAYER_SETTINGS.enabledPrayers },
     };
   const candidate = value as Partial<PrayerSettings>;
+  const method = candidate.method;
   const enabled = candidate.enabledPrayers;
   const fastingRoutine =
     candidate.fastingRoutine === 'mondayThursday' ||
@@ -63,8 +64,10 @@ function settingsFromUnknown(value: unknown): PrayerSettings {
       : 'off';
   return {
     method:
-      Number.isInteger(candidate.method) && (candidate.method as number) >= 0
-        ? (candidate.method as number)
+      method === null
+        ? null
+        : Number.isInteger(method) && (method as number) >= 0
+        ? (method as number)
         : DEFAULT_PRAYER_SETTINGS.method,
     school: candidate.school === 'hanafi' ? 'hanafi' : 'standard',
     notificationsEnabled:

@@ -8,6 +8,11 @@ export const DEFAULT_RECITER_EDITION = 'ar.alafasy';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const EDITION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// ponytail: English-only related terms are a bounded heuristic; use a curated,
+// licensed subject index for broader topical coverage.
+const RELATED_TRANSLATION_SEARCH_ALIASES: Record<string, readonly string[]> = {
+  greed: ['stinginess', 'miserliness', 'covet'],
+};
 
 export interface SurahSummary {
   number: number;
@@ -233,6 +238,15 @@ function validateSearchLimit(limit: number): void {
   }
 }
 
+function includesSearchTerm(text: string, term: string): boolean {
+  const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escapedTerm}\\w*\\b`, 'i').test(text);
+}
+
+function isEnglishEdition(edition: string): boolean {
+  return /^en(?:[._-]|$)/i.test(edition);
+}
+
 export class QuranClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
@@ -394,6 +408,38 @@ export class QuranClient {
       isQuranSearchResults,
       'Quran search results',
     );
+  }
+
+  async searchRelated(
+    query: string,
+    edition = DEFAULT_TRANSLATION_EDITION,
+    limit = 20,
+  ): Promise<ApiEnvelope<QuranSearchResults>> {
+    const normalizedQuery = validateSearchQuery(query);
+    const aliases = isEnglishEdition(edition)
+      ? RELATED_TRANSLATION_SEARCH_ALIASES[normalizedQuery.toLowerCase()] ?? []
+      : [];
+    if (!aliases.length) return this.search(normalizedQuery, edition, limit);
+
+    const terms = [normalizedQuery, ...aliases];
+    const responses = await Promise.all(
+      terms.map(term => this.search(term, edition, limit)),
+    );
+    const matches = new Map<string, QuranSearchMatch>();
+
+    responses.forEach((response, index) => {
+      for (const match of response.data.matches) {
+        if (!includesSearchTerm(match.text, terms[index])) continue;
+        const key = `${match.surah.number}:${match.numberInSurah}`;
+        if (!matches.has(key)) matches.set(key, match);
+      }
+    });
+
+    return {
+      code: 200,
+      status: 'OK',
+      data: { count: matches.size, matches: [...matches.values()] },
+    };
   }
 }
 

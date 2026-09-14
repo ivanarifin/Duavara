@@ -2,8 +2,10 @@
  * @format
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
+import { Linking } from 'react-native';
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
@@ -24,17 +26,59 @@ jest.mock(
   () => require('react-native-safe-area-context/jest/mock').default,
 );
 
+jest.mock('@/services/compass', () => {
+  const actual = jest.requireActual('@/services/compass');
+  return { ...actual, startQiblaCompass: jest.fn() };
+});
+
+jest.mock('@/services/notifications', () => {
+  const actual = jest.requireActual('@/services/notifications');
+  return {
+    ...actual,
+    cancelFastingNotifications: jest.fn(async () => undefined),
+    cancelPrayerNotifications: jest.fn(async () => undefined),
+    clearAllNotifications: jest.fn(async () => undefined),
+    getNotificationHealth: jest.fn(async () => ({
+      notifications: 'allowed',
+      timing: 'exact',
+      batteryOptimization: 'unrestricted',
+      bootRescheduling: 'supported',
+    })),
+    hasNativeNotificationSupport: jest.fn(() => true),
+    openBatteryOptimizationSettings: jest.fn(async () => undefined),
+    openExactAlarmSettings: jest.fn(async () => undefined),
+    playAdhanPreview: jest.fn(async () => true),
+    schedulePrayerNotifications: jest.fn(async () => []),
+    stopAdhanPreview: jest.fn(async () => undefined),
+  };
+});
+
+jest.mock('@/services/widget', () => ({
+  clearPrayerWidget: jest.fn(async () => undefined),
+  syncPrayerWidget: jest.fn(async () => undefined),
+  widgetLocationLabel: jest.fn(
+    (regionName: string | null, profileName: string | null) =>
+      regionName ?? profileName,
+  ),
+}));
+
 jest.mock('@/components', () => {
   const ReactRuntime = require('react');
   const { View } = require('react-native');
   return {
     NearbyMosques: () => null,
     QiblaCameraFinder: () => null,
-    QuranReader: () => null,
+    QuranReader: ({ visible }: { visible: boolean }) =>
+      visible
+        ? ReactRuntime.createElement(View, {
+            accessibilityLabel: 'Quran reader is open',
+          })
+        : null,
     RamadanDashboard: () => null,
-    SplashScreen: () =>
+    SplashScreen: ({ onFinish }: { onFinish: () => void }) =>
       ReactRuntime.createElement(View, {
         accessibilityLabel: 'Duavara splash screen',
+        onFinish,
       }),
     WorshipCompanion: () => null,
     ZakatCalculator: () => null,
@@ -45,11 +89,102 @@ import App, {
   formatLocationLabel,
   getCachedTodaySchedule,
   getCalculationKey,
+  isQuranShortcutUrl,
   parseManualCoordinates,
 } from '../App';
-import { DEFAULT_PRAYER_SETTINGS } from '@/services';
+import {
+  alAdhanClient,
+  DEFAULT_PRAYER_SETTINGS,
+  LOCATION_PROFILES_KEY,
+  SETTINGS_KEY,
+} from '@/services';
 
-test('includes coordinates in the calculation cache key', () => {
+const notificationMocks = jest.requireMock('@/services/notifications') as {
+  cancelFastingNotifications: jest.Mock;
+  cancelPrayerNotifications: jest.Mock;
+  schedulePrayerNotifications: jest.Mock;
+};
+const compassMocks = jest.requireMock('@/services/compass') as {
+  startQiblaCompass: jest.Mock;
+};
+const renderers = new Set<ReactTestRenderer.ReactTestRenderer>();
+let urlListener: ((event: { url: string }) => void) | null = null;
+let removeUrlListener: jest.Mock;
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+}
+
+async function renderApp(): Promise<ReactTestRenderer.ReactTestRenderer> {
+  let renderer!: ReactTestRenderer.ReactTestRenderer;
+  await ReactTestRenderer.act(async () => {
+    renderer = ReactTestRenderer.create(<App />);
+    await flushMicrotasks();
+  });
+  renderers.add(renderer);
+  return renderer;
+}
+
+async function finishSplash(
+  renderer: ReactTestRenderer.ReactTestRenderer,
+): Promise<void> {
+  const splash = renderer.root.findAll(
+    node => node.props.accessibilityLabel === 'Duavara splash screen',
+  )[0];
+  if (!splash) throw new Error('Splash screen was not rendered');
+  await ReactTestRenderer.act(async () => {
+    splash.props.onFinish();
+    await flushMicrotasks();
+  });
+}
+
+function findByAccessibilityLabel(
+  renderer: ReactTestRenderer.ReactTestRenderer,
+  label: string,
+): ReactTestRenderer.ReactTestInstance {
+  const control = renderer.root.findAll(
+    node => node.props.accessibilityLabel === label,
+  )[0];
+  if (!control)
+    throw new Error(`No control found for accessibility label: ${label}`);
+  return control;
+}
+
+async function press(
+  renderer: ReactTestRenderer.ReactTestRenderer,
+  label: string,
+): Promise<void> {
+  const control = findByAccessibilityLabel(renderer, label);
+  await ReactTestRenderer.act(async () => {
+    control.props.onPress();
+    await flushMicrotasks();
+  });
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  urlListener = null;
+  removeUrlListener = jest.fn();
+  jest.spyOn(Linking, 'getInitialURL').mockResolvedValue(null);
+  jest
+    .spyOn(Linking, 'addEventListener')
+    .mockImplementation((event, listener) => {
+      if (event === 'url')
+        urlListener = listener as (event: { url: string }) => void;
+      return { remove: removeUrlListener };
+    });
+});
+
+afterEach(async () => {
+  await ReactTestRenderer.act(async () => {
+    for (const renderer of renderers) renderer.unmount();
+    renderers.clear();
+    await flushMicrotasks();
+  });
+  jest.restoreAllMocks();
+});
+
+test('includes location and calculation mode in the calculation cache key', () => {
   const profile = {
     id: 'home',
     name: 'Home',
@@ -60,10 +195,116 @@ test('includes coordinates in the calculation cache key', () => {
     ...profile,
     coordinates: { latitude: 51.6, longitude: -0.12 },
   };
+  const manualSettings = { ...DEFAULT_PRAYER_SETTINGS, method: 3 };
 
   expect(getCalculationKey(profile, DEFAULT_PRAYER_SETTINGS)).not.toBe(
     getCalculationKey(movedProfile, DEFAULT_PRAYER_SETTINGS),
   );
+  expect(getCalculationKey(profile, DEFAULT_PRAYER_SETTINGS)).not.toBe(
+    getCalculationKey(profile, manualSettings),
+  );
+});
+
+test('switches a stored manual method back to Automatic through prayer settings', async () => {
+  jest
+    .spyOn(AsyncStorage, 'getItem')
+    .mockImplementation(async key =>
+      key === SETTINGS_KEY
+        ? JSON.stringify({ ...DEFAULT_PRAYER_SETTINGS, method: 3 })
+        : null,
+    );
+  jest.spyOn(alAdhanClient, 'getMethods').mockResolvedValue({
+    code: 200,
+    status: 'OK',
+    data: {},
+  });
+  const renderer = await renderApp();
+  await finishSplash(renderer);
+
+  await press(renderer, 'Open prayer preferences');
+  await press(renderer, 'Choose calculation method');
+
+  expect(
+    findByAccessibilityLabel(renderer, 'Automatic (closest authority)').props
+      .accessibilityState,
+  ).toEqual({ selected: false });
+
+  await press(renderer, 'Automatic (closest authority)');
+  await press(renderer, 'Choose calculation method');
+
+  expect(
+    findByAccessibilityLabel(renderer, 'Automatic (closest authority)').props
+      .accessibilityState,
+  ).toEqual({ selected: true });
+  expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+    SETTINGS_KEY,
+    expect.stringContaining('"method":null'),
+  );
+});
+
+test('cancels stale alarms without rescheduling when Automatic refresh fails', async () => {
+  const profile = {
+    id: 'home',
+    name: 'Home',
+    kind: 'home' as const,
+    coordinates: { latitude: 51.5, longitude: -0.12 },
+  };
+  jest.spyOn(AsyncStorage, 'getItem').mockImplementation(async key => {
+    if (key === SETTINGS_KEY) {
+      return JSON.stringify({
+        ...DEFAULT_PRAYER_SETTINGS,
+        method: 3,
+        notificationsEnabled: true,
+        fastingRoutine: 'mondayThursday',
+        fastingAlarmsEnabled: true,
+      });
+    }
+    if (key === LOCATION_PROFILES_KEY) {
+      return JSON.stringify({
+        activeProfileId: profile.id,
+        profiles: [profile],
+      });
+    }
+    return null;
+  });
+  jest.spyOn(alAdhanClient, 'getMethods').mockResolvedValue({
+    code: 200,
+    status: 'OK',
+    data: {},
+  });
+  const getTimings = jest
+    .spyOn(alAdhanClient, 'getTimings')
+    .mockRejectedValue(new Error('AlAdhan unavailable'));
+  jest
+    .spyOn(alAdhanClient, 'getCalendar')
+    .mockRejectedValue(new Error('AlAdhan unavailable'));
+
+  const renderer = await renderApp();
+  await finishSplash(renderer);
+  await ReactTestRenderer.act(async () => {
+    await flushMicrotasks();
+  });
+  getTimings.mockClear();
+  notificationMocks.cancelPrayerNotifications.mockClear();
+  notificationMocks.cancelFastingNotifications.mockClear();
+  notificationMocks.schedulePrayerNotifications.mockClear();
+
+  await press(renderer, 'Open prayer preferences');
+  await press(renderer, 'Choose calculation method');
+  await press(renderer, 'Automatic (closest authority)');
+  await ReactTestRenderer.act(async () => {
+    await flushMicrotasks();
+  });
+
+  expect(getTimings).toHaveBeenCalledWith(
+    expect.any(String),
+    profile.coordinates,
+    expect.objectContaining({ method: null }),
+    expect.any(Object),
+  );
+  expect(notificationMocks.cancelPrayerNotifications).toHaveBeenCalledTimes(1);
+  expect(notificationMocks.cancelFastingNotifications).toHaveBeenCalledTimes(1);
+  expect(notificationMocks.schedulePrayerNotifications).not.toHaveBeenCalled();
 });
 
 test('does not restore a cache without the active profile date', () => {
@@ -94,15 +335,153 @@ test('prefers the resolved region in the location label', () => {
   expect(formatLocationLabel(null, null, coordinates)).toBe('-6.26°, 106.81°');
 });
 
-test('renders the initial splash screen', () => {
-  let renderer: ReactTestRenderer.ReactTestRenderer;
+test('recognizes only the Quran home-screen shortcut URL', () => {
+  expect(isQuranShortcutUrl('duavara://quran')).toBe(true);
+  expect(isQuranShortcutUrl('duavara://quran/')).toBe(true);
+  expect(isQuranShortcutUrl('duavara://quran/ayah/1')).toBe(false);
+  expect(isQuranShortcutUrl('https://duavara.example/quran')).toBe(false);
+  expect(isQuranShortcutUrl(null)).toBe(false);
+});
 
-  ReactTestRenderer.act(() => {
-    renderer = ReactTestRenderer.create(<App />);
+test('opens Quran after a cold-start home-screen shortcut', async () => {
+  jest.spyOn(Linking, 'getInitialURL').mockResolvedValue('duavara://quran');
+  const renderer = await renderApp();
+
+  await finishSplash(renderer);
+
+  expect(
+    renderer.root.findAll(
+      node => node.props.accessibilityLabel === 'Quran reader is open',
+    ).length,
+  ).toBeGreaterThan(0);
+});
+
+test('replays a home-screen shortcut received during the splash screen', async () => {
+  const renderer = await renderApp();
+
+  expect(urlListener).not.toBeNull();
+  await ReactTestRenderer.act(async () => {
+    urlListener?.({ url: 'duavara://quran' });
+    await flushMicrotasks();
+  });
+  expect(
+    renderer.root.findAll(
+      node => node.props.accessibilityLabel === 'Quran reader is open',
+    ),
+  ).toHaveLength(0);
+
+  await finishSplash(renderer);
+
+  expect(
+    renderer.root.findAll(
+      node => node.props.accessibilityLabel === 'Quran reader is open',
+    ).length,
+  ).toBeGreaterThan(0);
+});
+
+test('opens Quran after a warm home-screen shortcut and removes its listener', async () => {
+  const renderer = await renderApp();
+  await finishSplash(renderer);
+
+  expect(urlListener).not.toBeNull();
+  await ReactTestRenderer.act(async () => {
+    urlListener?.({ url: 'duavara://quran' });
+    await flushMicrotasks();
   });
 
   expect(
-    renderer!.root.findAll(
+    renderer.root.findAll(
+      node => node.props.accessibilityLabel === 'Quran reader is open',
+    ).length,
+  ).toBeGreaterThan(0);
+
+  await ReactTestRenderer.act(async () => {
+    renderer.unmount();
+    await flushMicrotasks();
+  });
+  renderers.delete(renderer);
+  expect(removeUrlListener).toHaveBeenCalledTimes(1);
+});
+
+test('keeps the Kaaba target fixed while the Qibla needle rotates', async () => {
+  const profile = {
+    id: 'home',
+    name: 'Home',
+    kind: 'home' as const,
+    coordinates: { latitude: -6.2, longitude: 106.8 },
+  };
+  jest
+    .spyOn(AsyncStorage, 'getItem')
+    .mockImplementation(async key =>
+      key === LOCATION_PROFILES_KEY
+        ? JSON.stringify({ activeProfileId: profile.id, profiles: [profile] })
+        : null,
+    );
+  jest.spyOn(alAdhanClient, 'getQibla').mockResolvedValue({
+    code: 200,
+    status: 'OK',
+    data: { ...profile.coordinates, direction: 118 },
+  });
+  compassMocks.startQiblaCompass.mockImplementation(
+    async (_qibla, onHeading) => {
+      onHeading({ heading: 90, accuracy: 1, north: 'true', timestamp: 0 });
+      return () => undefined;
+    },
+  );
+  const renderer = await renderApp();
+  await finishSplash(renderer);
+
+  await press(renderer, 'Qibla');
+
+  const needle = renderer.root.findAll(
+    node =>
+      Array.isArray(node.props.style) &&
+      node.props.style.some(
+        (style: unknown) =>
+          typeof style === 'object' &&
+          style !== null &&
+          'transform' in style &&
+          JSON.stringify(style.transform) ===
+            JSON.stringify([{ rotate: '28deg' }]),
+      ),
+  )[0];
+  const kaaba = renderer.root.findAll(node => {
+    const styles = Array.isArray(node.props.style)
+      ? node.props.style
+      : [node.props.style];
+    return styles.some(
+      (style: unknown) =>
+        typeof style === 'object' &&
+        style !== null &&
+        'width' in style &&
+        style.width === 46 &&
+        'height' in style &&
+        style.height === 46,
+    );
+  })[0];
+
+  expect(compassMocks.startQiblaCompass).toHaveBeenCalledWith(
+    { ...profile.coordinates, direction: 118 },
+    expect.any(Function),
+  );
+  expect(needle).toBeDefined();
+  expect(kaaba).toBeDefined();
+  expect(needle.findAll(node => node === kaaba)).toHaveLength(0);
+  const kaabaStyles = Array.isArray(kaaba.props.style)
+    ? kaaba.props.style
+    : [kaaba.props.style];
+  expect(kaabaStyles).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ transform: expect.any(Array) }),
+    ]),
+  );
+});
+
+test('renders the initial splash screen', async () => {
+  const renderer = await renderApp();
+
+  expect(
+    renderer.root.findAll(
       node => node.props.accessibilityLabel === 'Duavara splash screen',
     ).length,
   ).toBeGreaterThan(0);

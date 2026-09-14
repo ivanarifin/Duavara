@@ -11,12 +11,12 @@ Duavara has no subscription, in-app purchases, paid account, or API key requirem
 ## What the app currently includes
 
 - **Today:** Fajr, Dhuhr, Asr, Maghrib, and Isha times, next-prayer countdown, current-prayer status, Hijri date, and sharing for today's timetable.
-- **Prayer accuracy and travel:** named Home, Work, Mosque, Travel, and custom location profiles; optional IANA timezone override, high-latitude rule, and per-prayer minute tuning. Each profile caches up to 30 days of schedules for offline use; the next seven days are used for native reminders.
+- **Prayer accuracy and travel:** named Home, Work, Mosque, Travel, and custom location profiles; Automatic calculation lets AlAdhan choose the closest supported authority from each place's coordinates, with manual community-method override, optional IANA timezone override, high-latitude rule, and per-prayer minute tuning. Each profile caches up to 30 days of schedules for offline use; the next seven days are used for native reminders.
 - **Qibla:** a bearing from true north, a live device-compass overlay when supported, and an optional camera view. The camera view is not required for the regular bearing.
 - **Fasting:** Monday/Thursday or alternating-day Dawud routines, Ramadan status when the returned Hijri date is in Ramadan, and optional Suhoor/Imsak reminders.
 - **Worship companion:** mark each daily prayer as prayed, view the current streak, and use a persistent Tasbih counter with 33 or 99 targets.
 - **Discover:** the next Hijri occasion, Islamic months, special days, and a daily reflection from the 99 Names.
-- **Quran:** Arabic Uthmani text by surah, selectable API-provided translations, translation search, bookmarks, saved reading progress, per-ayah streamed or user-downloaded recitation, adjustable Arabic/translation type sizes, light/dark reading surfaces, RTL-aware translations, and TalkBack labels. Quran content loads only when the reader is opened.
+- **Quran:** Arabic Uthmani text by surah, selectable API-provided translations, word/phrase search, and a small English related-translation helper for known topics such as `greed`. Topic results are clearly labeled as related translation matches, not a curated subject index. On Android 7.1+ launchers, long-press the Duavara icon and choose **Quran** to open the reader directly. The reader also includes bookmarks, saved reading progress, per-ayah streamed or user-downloaded recitation, adjustable Arabic/translation type sizes, light/dark reading surfaces, RTL-aware translations, and TalkBack labels.
 - **Nearby mosques:** search OpenStreetMap for Muslim places of worship within 5 km of the active location; save favourites, record local prayer notes, and open free OpenStreetMap directions.
 - **Zakat calculator:** calculate locally from user-entered cash, metals, business assets, debts, and selected gold or silver Nisab. Prices are entered manually; no market prices are fetched.
 - **Android home-screen widget:** show upcoming prayer times on Android. The widget is not implemented for iOS.
@@ -84,7 +84,7 @@ With an Android emulator running or an Android device connected:
 npm run android
 ```
 
-Android requests location access for device-based prayer times and true-north Qibla orientation. Notification access is requested when reminders are enabled. Camera access is optional and is requested only after opening the camera Qibla view.
+Android requests location access for device-based prayer times and true-north Qibla orientation. Notification access is requested when reminders are enabled. Camera access is optional and is requested only after opening the camera Qibla view. On Android 7.1+ launchers, long-press the Duavara icon and choose **Quran** to launch directly into the reader.
 
 ### iOS
 
@@ -101,7 +101,7 @@ The default target is the iOS Simulator. To choose a simulator or device, use th
 1. Open **Prayer settings** from the top-right menu.
 2. Set a location by allowing device location, or enter decimal latitude and longitude manually. Manual coordinates are useful when you do not want to grant location access.
 3. Save it as **Home**, **Work**, **Mosque**, **Travel**, or a custom place. Optionally add an IANA timezone, high-latitude rule, or local minute adjustments when your masjid timetable differs.
-4. Choose an AlAdhan calculation method and the Asr juristic method (**Standard** or **Hanafi**).
+4. Keep **Automatic (closest authority)** to let AlAdhan select from your saved place&apos;s coordinates, or choose the calculation method used by your local community; then choose the Asr juristic method (**Standard** or **Hanafi**).
 5. Optionally enable 24-hour time, prayer reminders, Adhan sound, and individual prayer alerts. Review **Notification health** to check permission, exact timing, and Android battery restrictions.
 
 Settings, saved places, up to 30 days of per-place prayer schedules, worship records, Tasbih count, mosque favourites, Quran reading preferences, and Zakat form are stored locally with AsyncStorage. The app restores a matching saved profile timetable while offline, then refreshes it when a network connection is available.
@@ -110,7 +110,7 @@ Settings, saved places, up to 30 days of per-place prayer schedules, worship rec
 
 There is no `.env` file, backend, API key, or project-specific runtime configuration required by the current app. The app uses these free-to-access public HTTPS services:
 
-- [AlAdhan API](https://aladhan.com/prayer-times-api) for prayer timings, monthly calendars, calculation methods, Qibla bearings, Hijri occasions, Islamic months, special days, and the 99 Names.
+- [AlAdhan API](https://aladhan.com/prayer-times-api) for prayer timings, monthly calendars, calculation methods, Automatic closest-authority selection from active-place coordinates, Qibla bearings, Hijri occasions, Islamic months, special days, and the 99 Names.
 - [AlQuran.cloud](https://alquran.cloud/api) for the surah list, Arabic Uthmani Quran text, selectable translations, translation search, and API-provided recitation streams. The reader identifies the active translator and reciter.
 - [OpenStreetMap Overpass API](https://overpass-api.de/) for nearby mosque search. The app displays OpenStreetMap attribution in the results section.
 - The Android or iOS platform geocoder for a best-effort nearby-region label in the header. It may use the platform's network-backed provider.

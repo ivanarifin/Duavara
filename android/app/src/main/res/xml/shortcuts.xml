@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="quran"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_quran_short_label"
+        android:shortcutLongLabel="@string/shortcut_quran_long_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="duavara://quran"
+            android:targetPackage="id.vandev.duavara"
+            android:targetClass="id.vandev.duavara.MainActivity" />
+    </shortcut>
+</shortcuts>

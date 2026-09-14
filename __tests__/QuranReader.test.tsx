@@ -13,6 +13,7 @@ type MockedQuran = {
   getTranslationEditions: jest.Mock;
   getVerseByVerseReciters: jest.Mock;
   getSurah: jest.Mock;
+  searchRelated: jest.Mock;
 };
 
 type MockedStorage = {
@@ -39,6 +40,7 @@ jest.mock('@/services/quran', () => {
     getTranslationEditions: jest.fn(),
     getVerseByVerseReciters: jest.fn(),
     getSurah: jest.fn(),
+    searchRelated: jest.fn(),
   };
 
   return {
@@ -120,6 +122,7 @@ const mockGetSurahs = quranMocks.getSurahs;
 const mockGetTranslationEditions = quranMocks.getTranslationEditions;
 const mockGetVerseByVerseReciters = quranMocks.getVerseByVerseReciters;
 const mockGetSurah = quranMocks.getSurah;
+const mockSearchRelated = quranMocks.searchRelated;
 const storageMocks = jest.requireMock('@/services/quranStorage')
   .__mocks as MockedStorage;
 const mockToggleBookmark = storageMocks.toggleBookmark;
@@ -242,6 +245,18 @@ async function press(
   });
 }
 
+async function changeText(
+  renderer: ReactTestRenderer.ReactTestRenderer,
+  label: string,
+  value: string,
+): Promise<void> {
+  const input = findByAccessibilityLabel(renderer, label);
+  await ReactTestRenderer.act(async () => {
+    input.props.onChangeText(value);
+    await flushMicrotasks();
+  });
+}
+
 async function openFirstSurah(): Promise<ReactTestRenderer.ReactTestRenderer> {
   const renderer = await renderReader();
   await press(renderer, 'Open Al-Faatiha, 1 ayahs');
@@ -282,6 +297,7 @@ beforeEach(() => {
             : audioDetail,
       }),
   );
+  mockSearchRelated.mockResolvedValue({ data: { matches: [] } });
 });
 
 describe('QuranReader', () => {
@@ -295,6 +311,78 @@ describe('QuranReader', () => {
 
     expectText(renderer, arabicAyah.text);
     expectText(renderer, translationAyah.text);
+  });
+
+  test('searches related translation terms and labels their scope', async () => {
+    const searchMatch = {
+      number: 96,
+      text: 'You will find them the greediest of people for life.',
+      edition: { ...translationEdition },
+      surah: summary,
+      numberInSurah: 1,
+    };
+    mockSearchRelated.mockResolvedValue({ data: { matches: [searchMatch] } });
+    const renderer = await renderReader();
+
+    const searchField = findByAccessibilityLabel(
+      renderer,
+      'Quran translation search field',
+    );
+    expect(searchField.props.maxLength).toBe(120);
+    await changeText(renderer, 'Quran translation search field', 'greed');
+    await press(renderer, 'Search selected Quran translation');
+
+    expect(mockSearchRelated).toHaveBeenCalledWith('greed', 'en.sahih');
+    expectText(renderer, searchMatch.text);
+    expect(
+      findByAccessibilityLabel(
+        renderer,
+        'Related translation matches in Saheeh International. This is not a curated subject index.',
+      ),
+    ).toBeDefined();
+  });
+
+  test('cancels a pending search when the query is cleared', async () => {
+    let resolveSearch!: (value: { data: { matches: [] } }) => void;
+    mockSearchRelated.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveSearch = resolve;
+        }),
+    );
+    const renderer = await renderReader();
+
+    await changeText(renderer, 'Quran translation search field', 'greed');
+    await press(renderer, 'Search selected Quran translation');
+    expectText(renderer, 'Searching Quran…');
+
+    await changeText(renderer, 'Quran translation search field', '');
+    expect(
+      renderer.root.findAll(node => node.props.children === 'Searching Quran…'),
+    ).toHaveLength(0);
+
+    await ReactTestRenderer.act(async () => {
+      resolveSearch({ data: { matches: [] } });
+      await flushMicrotasks();
+    });
+    expect(
+      renderer.root.findAll(node => node.props.children === 'Searching Quran…'),
+    ).toHaveLength(0);
+  });
+
+  test('shows a synchronous search validation error without leaving a spinner', async () => {
+    mockSearchRelated.mockImplementation(() => {
+      throw new Error('Quran search must contain 1 to 120 characters');
+    });
+    const renderer = await renderReader();
+
+    await changeText(renderer, 'Quran translation search field', 'greed');
+    await press(renderer, 'Search selected Quran translation');
+
+    expectText(renderer, 'Quran search must contain 1 to 120 characters');
+    expect(
+      renderer.root.findAll(node => node.props.children === 'Searching Quran…'),
+    ).toHaveLength(0);
   });
 
   test('opens accessible Reading settings and persists an Arabic font adjustment', async () => {

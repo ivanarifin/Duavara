@@ -62,7 +62,7 @@ import {
   QiblaData,
   toDailyPrayerData,
 } from '@/domain';
-import kaabaAsset from '@/assets/kaaba-cc0.png';
+import appIconAsset from '@/assets/duavara-app-icon.png';
 import type { CompassHeading } from '@/services/compass';
 import {
   NearbyMosques,
@@ -111,6 +111,14 @@ type DiscoverData = {
   specialDays: unknown;
   names: unknown;
 };
+
+type QuranShortcutRequest = { id: number };
+
+const QURAN_SHORTCUT_URL = /^duavara:\/\/quran\/?$/;
+
+export function isQuranShortcutUrl(url: string | null | undefined): boolean {
+  return typeof url === 'string' && QURAN_SHORTCUT_URL.test(url);
+}
 
 const COLORS = {
   ink: '#08201E',
@@ -359,18 +367,56 @@ class RootErrorBoundary extends Component<
 function App() {
   const [hasFinishedSplash, setHasFinishedSplash] = useState(false);
   const [appSession, setAppSession] = useState(0);
+  const [quranShortcutRequest, setQuranShortcutRequest] =
+    useState<QuranShortcutRequest | null>(null);
+  const shortcutRequestIdRef = useRef(0);
   const finishSplash = useCallback(() => setHasFinishedSplash(true), []);
   const resetAppSession = useCallback(
     () => setAppSession(current => current + 1),
     [],
   );
+  const requestQuranShortcut = useCallback(() => {
+    shortcutRequestIdRef.current += 1;
+    setQuranShortcutRequest({ id: shortcutRequestIdRef.current });
+  }, []);
+  const consumeQuranShortcut = useCallback((requestId: number) => {
+    setQuranShortcutRequest(current =>
+      current?.id === requestId ? null : current,
+    );
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const handleUrl = (url: string | null | undefined) => {
+      if (isQuranShortcutUrl(url)) requestQuranShortcut();
+    };
+    const subscription = Linking.addEventListener('url', event =>
+      handleUrl(event.url),
+    );
+
+    Linking.getInitialURL()
+      .then(url => {
+        if (!cancelled) handleUrl(url);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      subscription.remove();
+    };
+  }, [requestQuranShortcut]);
 
   return (
     <RootErrorBoundary>
       <SafeAreaProvider>
         <StatusBar barStyle="light-content" />
         {hasFinishedSplash ? (
-          <Duavara key={appSession} onLocalDataDeleted={resetAppSession} />
+          <Duavara
+            key={appSession}
+            onLocalDataDeleted={resetAppSession}
+            quranShortcutRequest={quranShortcutRequest}
+            onQuranShortcutHandled={consumeQuranShortcut}
+          />
         ) : (
           <SplashScreen onFinish={finishSplash} />
         )}
@@ -379,9 +425,18 @@ function App() {
   );
 }
 
-function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
+function Duavara({
+  onLocalDataDeleted,
+  quranShortcutRequest,
+  onQuranShortcutHandled,
+}: {
+  onLocalDataDeleted: () => void;
+  quranShortcutRequest: QuranShortcutRequest | null;
+  onQuranShortcutHandled: (requestId: number) => void;
+}) {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<Tab>('today');
+  const [isQuranReaderOpen, setIsQuranReaderOpen] = useState(false);
   const [settings, setSettings] = useState<PrayerSettings>(
     DEFAULT_PRAYER_SETTINGS,
   );
@@ -469,6 +524,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     [],
   );
   const clearPrayerSchedules = useCallback(() => {
+    schedulesRef.current = [];
     setToday(null);
     setUpcomingSchedules([]);
     setMonthSchedules([]);
@@ -618,6 +674,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       const todayKey = formatDateKeyInTimeZone(new Date(), profile.timezone);
       const todaySchedule = getCachedTodaySchedule(schedules, todayKey);
       if (!todaySchedule || !isCurrentRequest(requestToken)) return false;
+      schedulesRef.current = schedules;
       setCoordinates(profile.coordinates);
       setToday(todaySchedule);
       setUpcomingSchedules(schedules);
@@ -713,6 +770,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         .slice(0, 30);
 
       if (!isCurrentRequest(requestToken)) return;
+      schedulesRef.current = schedules;
       setCoordinates(nextCoordinates);
       setToday(dailySchedule);
       setUpcomingSchedules(schedules);
@@ -993,6 +1051,17 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     ],
   );
 
+  const openQuranReader = useCallback(() => {
+    setIsSettingsOpen(false);
+    setIsQuranReaderOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!quranShortcutRequest) return;
+    openQuranReader();
+    onQuranShortcutHandled(quranShortcutRequest.id);
+  }, [onQuranShortcutHandled, openQuranReader, quranShortcutRequest]);
+
   const refreshNotificationHealth = useCallback(async () => {
     try {
       setNotificationHealth(await getNotificationHealth());
@@ -1025,18 +1094,48 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       update: (current: PrayerSettings) => PrayerSettings,
       refresh = false,
     ) => {
+      const shouldRefresh = refresh && activeProfile !== null;
+      const requestToken = shouldRefresh ? beginRequest() : null;
+      const previousSettings = settingsRef.current;
+      const previousSchedules = schedulesRef.current;
+      const previousToday = today;
+      const previousMonthSchedules = monthSchedules;
+      const previousHijriDate = hijriDate;
       let committed: PrayerSettings | undefined;
+      let clearedReminders = false;
       try {
+        if (shouldRefresh && requestToken !== null) {
+          clearPrayerSchedules();
+          if (hasNativeNotificationSupport()) {
+            clearedReminders = true;
+            await enqueueNotificationOperation(async () => {
+              if (!isCurrentRequest(requestToken)) return;
+              await scheduleNotificationsNow([], previousSettings);
+            });
+          }
+          if (!isCurrentRequest(requestToken)) return;
+        }
         await enqueueSettingsOperation(async () => {
+          if (
+            shouldRefresh &&
+            requestToken !== null &&
+            !isCurrentRequest(requestToken)
+          ) {
+            return;
+          }
           const nextSettings = update(settingsRef.current);
           await savePrayerSettings(nextSettings);
           settingsRef.current = nextSettings;
           setSettings(nextSettings);
           committed = nextSettings;
         });
-        if (!refresh || !committed || !activeProfile) return;
-        const requestToken = beginRequest();
-        clearPrayerSchedules();
+        if (
+          !shouldRefresh ||
+          !committed ||
+          !activeProfile ||
+          requestToken === null
+        )
+          return;
         invalidateQibla();
         setIsRefreshing(true);
         try {
@@ -1045,8 +1144,25 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
           if (isCurrentRequest(requestToken)) setIsRefreshing(false);
         }
       } catch (error) {
+        if (
+          !committed &&
+          (requestToken === null || isCurrentRequest(requestToken))
+        ) {
+          schedulesRef.current = previousSchedules;
+          setToday(previousToday);
+          setUpcomingSchedules(previousSchedules);
+          setMonthSchedules(previousMonthSchedules);
+          setHijriDate(previousHijriDate);
+          if (clearedReminders) {
+            await enqueueNotificationOperation(() =>
+              scheduleNotificationsNow(previousSchedules, previousSettings),
+            ).catch(() => undefined);
+          }
+        }
         setMessage(
-          error instanceof Error
+          committed
+            ? 'Settings saved, but prayer alerts are paused until prayer times refresh.'
+            : error instanceof Error
             ? error.message
             : 'Unable to apply preferences.',
         );
@@ -1056,10 +1172,15 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       activeProfile,
       beginRequest,
       clearPrayerSchedules,
+      enqueueNotificationOperation,
       enqueueSettingsOperation,
+      hijriDate,
       invalidateQibla,
       isCurrentRequest,
+      monthSchedules,
       refreshForCoordinates,
+      scheduleNotificationsNow,
+      today,
     ],
   );
 
@@ -1073,30 +1194,28 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
           if (!isCurrentRequest(requestToken)) return;
           const previousSettings = settingsRef.current;
           const nextSettings = update(previousSettings);
+          const schedules = schedulesRef.current;
           try {
-            await scheduleNotificationsNow(upcomingSchedules, nextSettings);
+            await scheduleNotificationsNow(schedules, nextSettings);
             if (!isCurrentRequest(requestToken)) {
-              await scheduleNotificationsNow(
-                upcomingSchedules,
-                previousSettings,
-              ).catch(() => undefined);
+              await scheduleNotificationsNow(schedules, previousSettings).catch(
+                () => undefined,
+              );
               return;
             }
             try {
               await savePrayerSettings(nextSettings);
             } catch (error) {
-              await scheduleNotificationsNow(
-                upcomingSchedules,
-                previousSettings,
-              ).catch(() => undefined);
+              await scheduleNotificationsNow(schedules, previousSettings).catch(
+                () => undefined,
+              );
               await savePrayerSettings(previousSettings).catch(() => undefined);
               throw error;
             }
             if (!isCurrentRequest(requestToken)) {
-              await scheduleNotificationsNow(
-                upcomingSchedules,
-                previousSettings,
-              ).catch(() => undefined);
+              await scheduleNotificationsNow(schedules, previousSettings).catch(
+                () => undefined,
+              );
               return;
             }
             settingsRef.current = nextSettings;
@@ -1112,7 +1231,6 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
       enqueueSettingsOperation,
       isCurrentRequest,
       scheduleNotificationsNow,
-      upcomingSchedules,
     ],
   );
 
@@ -1564,6 +1682,7 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
     settings,
     onUseLocation: refreshDeviceLocation,
     onOpenSettings: openSettings,
+    onOpenQuranReader: openQuranReader,
     onRefresh: refreshActive,
   });
 
@@ -1756,6 +1875,10 @@ function Duavara({ onLocalDataDeleted }: { onLocalDataDeleted: () => void }) {
         }}
         onDeleteAllData={deleteLocalData}
       />
+      <QuranReader
+        visible={isQuranReaderOpen}
+        onClose={() => setIsQuranReaderOpen(false)}
+      />
     </View>
   );
 }
@@ -1777,6 +1900,7 @@ function renderTab(props: {
   settings: PrayerSettings;
   onUseLocation: () => void;
   onOpenSettings: () => void;
+  onOpenQuranReader: () => void;
   onRefresh: () => void;
 }) {
   if (props.isLoading && !props.today) return <LoadingState />;
@@ -1820,6 +1944,7 @@ function renderTab(props: {
         discover={props.discover}
         isLoading={props.isRefreshing}
         coordinates={props.coordinates}
+        onOpenQuranReader={props.onOpenQuranReader}
       />
     );
   }
@@ -2330,6 +2455,7 @@ function QiblaView({
     relativeAngle === null
       ? qibla?.direction ?? 0
       : Math.round(Math.abs(relativeAngle));
+  const qiblaAngle = relativeAngle ?? qibla?.direction ?? 0;
 
   return (
     <>
@@ -2343,39 +2469,20 @@ function QiblaView({
       </View>
       {qibla ? (
         <View style={styles.qiblaCard}>
-          <View style={styles.qiblaLandmark}>
-            <Image source={kaabaAsset} style={styles.qiblaLandmarkImage} />
-            <View>
-              <Text style={styles.qiblaLandmarkKicker}>TOWARD THE KAABA</Text>
-              <Text style={styles.qiblaLandmarkText}>
-                Follow the bearing below
-              </Text>
-            </View>
-          </View>
           <View style={styles.compass}>
-            {relativeAngle === null ? (
-              <>
-                <Text style={styles.compassCardinalNorth}>N</Text>
-                <Text style={styles.compassCardinalSouth}>S</Text>
-                <Text style={styles.compassCardinalWest}>W</Text>
-                <Text style={styles.compassCardinalEast}>E</Text>
-              </>
-            ) : (
+            {relativeAngle !== null ? (
               <Text style={styles.compassPhoneForward}>PHONE FORWARD</Text>
-            )}
+            ) : null}
             <View
               style={[
                 styles.qiblaNeedle,
-                {
-                  transform: [
-                    { rotate: `${relativeAngle ?? qibla.direction}deg` },
-                  ],
-                },
+                { transform: [{ rotate: `${qiblaAngle}deg` }] },
               ]}
             >
               <View style={styles.qiblaNeedleTip} />
               <View style={styles.qiblaNeedleTail} />
             </View>
+            <Image source={appIconAsset} style={styles.qiblaTargetImage} />
             <View style={styles.compassCenter} />
           </View>
           <Text style={styles.qiblaNumber}>{displayedAngle}°</Text>
@@ -2456,12 +2563,13 @@ function DiscoverView({
   discover,
   isLoading,
   coordinates,
+  onOpenQuranReader,
 }: {
   discover: DiscoverData | null;
   isLoading: boolean;
   coordinates: Coordinates | null;
+  onOpenQuranReader: () => void;
 }) {
-  const [isQuranReaderOpen, setIsQuranReaderOpen] = useState(false);
   const [isZakatCalculatorOpen, setIsZakatCalculatorOpen] = useState(false);
   const names = asRecords(discover?.names);
   const specialDays = asRecords(discover?.specialDays);
@@ -2550,7 +2658,7 @@ function DiscoverView({
         <View style={styles.companionActionRow}>
           <Pressable
             style={styles.companionPrimaryAction}
-            onPress={() => setIsQuranReaderOpen(true)}
+            onPress={onOpenQuranReader}
             accessibilityRole="button"
             accessibilityLabel="Open Quran reader"
           >
@@ -2585,10 +2693,6 @@ function DiscoverView({
           you choose.
         </Text>
       </View>
-      <QuranReader
-        visible={isQuranReaderOpen}
-        onClose={() => setIsQuranReaderOpen(false)}
-      />
       <ZakatCalculator
         visible={isZakatCalculatorOpen}
         onClose={() => setIsZakatCalculatorOpen(false)}
@@ -2754,7 +2858,7 @@ function SettingsSheet({
   isBusy: boolean;
   message: string | null;
   onClose: () => void;
-  onMethod: (method: number) => void;
+  onMethod: (method: PrayerSettings['method']) => void;
   onSchool: (school: PrayerSettings['school']) => void;
   onNotifications: (enabled: boolean) => void;
   onPrayerReminder: (prayer: PrayerName, enabled: boolean) => void;
@@ -2786,9 +2890,21 @@ function SettingsSheet({
   onSaveLocation: () => void;
   onDeleteAllData: () => void;
 }) {
-  const methodOptions = methods.length
-    ? methods
-    : [{ id: settings.method, name: `Method ${settings.method}` }];
+  const automaticMethod = {
+    id: null,
+    name: 'Automatic (closest authority)',
+  };
+  const methodOptions: {
+    id: PrayerSettings['method'];
+    name: string;
+  }[] = [
+    automaticMethod,
+    ...(methods.length
+      ? methods.map(method => ({ id: method.id, name: method.name }))
+      : settings.method === null
+      ? []
+      : [{ id: settings.method, name: `Method ${settings.method}` }]),
+  ];
   const selectedMethod = methodOptions.find(
     method => method.id === settings.method,
   );
@@ -2895,7 +3011,9 @@ function SettingsSheet({
                 <Text style={styles.sheetKicker}>PRAYER TIMES</Text>
                 <Text style={styles.sheetTitle}>Calculation method</Text>
                 <Text style={styles.settingsHint}>
-                  Select the method used by your local community.
+                  Automatic lets AlAdhan choose the closest supported authority
+                  for this place. Choose your local community&apos;s method to
+                  override it.
                 </Text>
                 {message ? (
                   <Text
@@ -2914,7 +3032,7 @@ function SettingsSheet({
                   const isSelected = method.id === settings.method;
                   return (
                     <Pressable
-                      key={method.id}
+                      key={method.id ?? 'automatic'}
                       style={[
                         styles.methodPickerOption,
                         isSelected && styles.methodPickerOptionSelected,
@@ -3038,13 +3156,19 @@ function SettingsSheet({
                       style={styles.methodPickerTriggerValue}
                       numberOfLines={1}
                     >
-                      {selectedMethod?.name ?? `Method ${settings.method}`}
+                      {selectedMethod?.name ??
+                        (settings.method === null
+                          ? automaticMethod.name
+                          : `Method ${settings.method}`)}
                     </Text>
                   </View>
                   <Text style={styles.methodPickerChevron}>›</Text>
                 </Pressable>
                 <Text style={styles.settingsHint}>
-                  Choose the calculation method used by your local community.
+                  Automatic uses this place&apos;s coordinates to select
+                  AlAdhan&apos;s closest supported authority. Use a manual
+                  method when your mosque or community follows a specific
+                  timetable.
                 </Text>
 
                 <Text style={styles.settingsLabel}>ASR JURISTIC METHOD</Text>
@@ -4269,31 +4393,6 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     overflow: 'hidden',
   },
-  qiblaLandmark: {
-    alignSelf: 'stretch',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: 'rgba(234, 203, 125, 0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(234, 203, 125, 0.18)',
-    borderRadius: 16,
-    padding: 10,
-    marginBottom: 20,
-  },
-  qiblaLandmarkImage: { width: 58, height: 58, borderRadius: 12 },
-  qiblaLandmarkKicker: {
-    color: COLORS.gold,
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 1.05,
-  },
-  qiblaLandmarkText: {
-    color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 16,
-    marginTop: 4,
-  },
   compass: {
     width: 246,
     height: 246,
@@ -4304,34 +4403,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 22,
-  },
-  compassCardinalNorth: {
-    color: COLORS.coral,
-    fontSize: 13,
-    fontWeight: '900',
-    position: 'absolute',
-    top: 15,
-  },
-  compassCardinalSouth: {
-    color: COLORS.muted,
-    fontSize: 12,
-    fontWeight: '700',
-    position: 'absolute',
-    bottom: 15,
-  },
-  compassCardinalWest: {
-    color: COLORS.muted,
-    fontSize: 12,
-    fontWeight: '700',
-    position: 'absolute',
-    left: 17,
-  },
-  compassCardinalEast: {
-    color: COLORS.muted,
-    fontSize: 12,
-    fontWeight: '700',
-    position: 'absolute',
-    right: 17,
   },
   compassPhoneForward: {
     color: COLORS.mintBright,
@@ -4358,6 +4429,15 @@ const styles = StyleSheet.create({
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
     borderBottomColor: COLORS.gold,
+  },
+  qiblaTargetImage: {
+    position: 'absolute',
+    top: 34,
+    left: '50%',
+    marginLeft: -23,
+    width: 46,
+    height: 46,
+    borderRadius: 12,
   },
   qiblaNeedleTail: {
     position: 'absolute',

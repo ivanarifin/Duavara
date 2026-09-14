@@ -139,6 +139,38 @@ describe('AlAdhan calculation options', () => {
     expect(params.has('tune')).toBe(false);
   });
 
+  test('omits method for automatic timings while preserving numeric methods', async () => {
+    const { client, fetchMock } = createClient();
+    const automaticSettings: PrayerSettings = {
+      ...settings,
+      method: null,
+    };
+
+    await client.getTimings('28-08-2026', coordinates, automaticSettings);
+    await client.getTimings('28-08-2026', coordinates, settings);
+
+    const [automaticUrl] = fetchMock.mock.calls[0] as [string];
+    const [manualUrl] = fetchMock.mock.calls[1] as [string];
+    expect(new URL(automaticUrl).searchParams.has('method')).toBe(false);
+    expect(new URL(manualUrl).searchParams.get('method')).toBe('3');
+  });
+
+  test('omits method for automatic calendar requests while preserving numeric methods', async () => {
+    const { client, fetchMock } = createClient();
+    const automaticSettings: PrayerSettings = {
+      ...settings,
+      method: null,
+    };
+
+    await client.getCalendar(8, 2026, coordinates, automaticSettings);
+    await client.getCalendar(8, 2026, coordinates, settings);
+
+    const [automaticUrl] = fetchMock.mock.calls[0] as [string];
+    const [manualUrl] = fetchMock.mock.calls[1] as [string];
+    expect(new URL(automaticUrl).searchParams.has('method')).toBe(false);
+    expect(new URL(manualUrl).searchParams.get('method')).toBe('3');
+  });
+
   test('rejects invalid calculation options before fetching', async () => {
     for (const invalid of [
       { timezone: 'Not/AnIanaZone', highLatitudeRule: 'angleBased' },

@@ -40,7 +40,10 @@ function validateCoordinates(coordinates: Coordinates): void {
 }
 
 function validateSettings(settings: PrayerSettings): void {
-  if (!Number.isInteger(settings.method) || settings.method < 0) {
+  if (
+    settings.method !== null &&
+    (!Number.isInteger(settings.method) || settings.method < 0)
+  ) {
     throw new Error('Prayer calculation method must be a non-negative integer');
   }
   if (settings.school !== 'standard' && settings.school !== 'hanafi') {
@@ -269,7 +272,7 @@ export class AlAdhanClient {
     return this.request<AlAdhanTimingsData>(`/timings/${apiDate(date)}`, {
       latitude: coordinates.latitude,
       longitude: coordinates.longitude,
-      method: settings.method,
+      method: settings.method ?? undefined,
       school: settings.school === 'hanafi' ? 1 : 0,
       iso8601: 'true',
       ...calculationParams,
@@ -295,7 +298,7 @@ export class AlAdhanClient {
       year,
       latitude: coordinates.latitude,
       longitude: coordinates.longitude,
-      method: settings.method,
+      method: settings.method ?? undefined,
       school: settings.school === 'hanafi' ? 1 : 0,
       iso8601: 'true',
       ...calculationParams,

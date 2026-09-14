@@ -169,6 +169,15 @@ describe('prayer settings storage', () => {
     await AsyncStorage.clear();
   });
 
+  test('defaults to Automatic and preserves persisted calculation modes', async () => {
+    await expect(getPrayerSettings()).resolves.toMatchObject({ method: null });
+
+    for (const method of [null, 0, 3]) {
+      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ method }));
+      await expect(getPrayerSettings()).resolves.toMatchObject({ method });
+    }
+  });
+
   test('turns fasting alarms off when the fasting routine is off', async () => {
     const settings = await getPrayerSettings();
     await savePrayerSettings({

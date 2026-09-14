@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -145,6 +145,20 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
   const lastProgressRef = useRef<string | null>(null);
   const preferencesRef = useRef(readerPreferences);
   const searchRequestRef = useRef(0);
+  const playbackRequestRef = useRef(0);
+  const isMountedRef = useRef(true);
+  const cancelPlayback = useCallback(() => {
+    playbackRequestRef.current += 1;
+    playerRef.current.release();
+    setPlayingAyahNumber(null);
+    setAudioState('stopped');
+  }, []);
+  const invalidateSearch = useCallback(() => {
+    searchRequestRef.current += 1;
+    setSearchLoading(false);
+    setSearchResults(null);
+    setSearchError(null);
+  }, []);
 
   const selectedTranslation = useMemo(
     () =>
@@ -266,6 +280,7 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
             : savedPreferences;
           preferencesRef.current = safePreferences;
           setReaderPreferences(safePreferences);
+          invalidateSearch();
 
           setTranslationEditionId(safePreferences.translationEditionId);
           setTranslations(availableTranslations);
@@ -290,17 +305,22 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [invalidateSearch]);
 
   useEffect(() => {
     const player = playerRef.current;
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
+      searchRequestRef.current += 1;
+      playbackRequestRef.current += 1;
       player.release();
     };
   }, []);
 
   useEffect(() => {
     if (!selectedSurah) {
+      cancelPlayback();
       setContent(null);
       setDetailLoading(false);
       setDetailError(null);
@@ -308,13 +328,11 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
     }
 
     let cancelled = false;
+    cancelPlayback();
     setContent(null);
     setDetailLoading(true);
     setDetailError(null);
-    setPlayingAyahNumber(null);
-    setAudioState('stopped');
     setDownloadedAyahNumbers(new Set());
-    playerRef.current.stop();
 
     quranClient
       .getSurah(selectedSurah.number)
@@ -382,12 +400,14 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
   }, [
     detailRetryKey,
     reciterEditionId,
+    cancelPlayback,
     selectedReciter.englishName,
     selectedSurah,
     translationEditionId,
   ]);
 
   const selectTranslation = (edition: QuranEdition) => {
+    if (edition.identifier !== translationEditionId) invalidateSearch();
     setTranslationEditionId(edition.identifier);
 
     updateReaderPreferences({
@@ -396,22 +416,35 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
     });
   };
 
+  const selectReciter = (edition: QuranEdition) => {
+    if (edition.identifier === reciterEditionId) return;
+    cancelPlayback();
+    setReciterEditionId(edition.identifier);
+  };
+
   const selectSurah = (
     surah: SurahSummary,
     ayahNumber: number | null = null,
   ) => {
+    invalidateSearch();
     setDetailRetryKey(0);
     setResumeAyahNumber(ayahNumber);
     setSelectedSurah(surah);
-    setSearchResults(null);
-    setSearchError(null);
     setShowBookmarks(false);
   };
 
-  const recordProgress = (ayahNumber: number) => {
-    if (!selectedSurah) return;
+  const closeReader = () => {
+    onClose();
+  };
+
+  const closeSelectedSurah = () => {
+    cancelPlayback();
+    setSelectedSurah(null);
+  };
+
+  const recordProgress = (surahNumber: number, ayahNumber: number) => {
     const nextProgress = {
-      surahNumber: selectedSurah.number,
+      surahNumber,
       ayahNumber,
       updatedAt: Date.now(),
     };
@@ -423,34 +456,52 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
   };
 
   const runSearch = () => {
+    if (searchLoading) return;
     const query = searchQuery.trim();
     const requestToken = searchRequestRef.current + 1;
     searchRequestRef.current = requestToken;
     if (!query) {
+      setSearchLoading(false);
       setSearchResults(null);
       setSearchError(null);
       return;
     }
 
     setSearchLoading(true);
+    setSearchResults(null);
     setSearchError(null);
-    quranClient
-      .search(query, translationEditionId)
-      .then(response => {
-        if (searchRequestRef.current === requestToken) {
-          setSearchResults(response.data.matches);
-        }
-      })
-      .catch(error => {
-        if (searchRequestRef.current === requestToken) {
-          setSearchError(
-            errorMessage(error, 'The Quran search could not be completed.'),
-          );
-        }
-      })
-      .finally(() => {
-        if (searchRequestRef.current === requestToken) setSearchLoading(false);
-      });
+    try {
+      quranClient
+        .searchRelated(query, translationEditionId)
+        .then(response => {
+          if (searchRequestRef.current === requestToken) {
+            setSearchResults(response.data.matches);
+          }
+        })
+        .catch(error => {
+          if (searchRequestRef.current === requestToken) {
+            setSearchError(
+              errorMessage(error, 'The Quran search could not be completed.'),
+            );
+          }
+        })
+        .finally(() => {
+          if (searchRequestRef.current === requestToken)
+            setSearchLoading(false);
+        });
+    } catch (error) {
+      if (searchRequestRef.current === requestToken) {
+        setSearchError(
+          errorMessage(error, 'The Quran search could not be completed.'),
+        );
+        setSearchLoading(false);
+      }
+    }
+  };
+
+  const changeSearchQuery = (query: string) => {
+    setSearchQuery(query);
+    invalidateSearch();
   };
 
   const openSearchMatch = (match: QuranSearchMatch) => {
@@ -459,15 +510,15 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
     else setNotice('The surah list is still loading. Please try again.');
   };
 
-  const toggleAyahBookmark = async (ayah: QuranAyah) => {
-    if (!selectedSurah || bookmarkBusyAyah === ayah.number) return;
+  const toggleAyahBookmark = async (surah: SurahSummary, ayah: QuranAyah) => {
+    if (bookmarkBusyAyah === ayah.number) return;
     setBookmarkBusyAyah(ayah.number);
     try {
       setBookmarks(
         await toggleBookmark({
-          surahNumber: selectedSurah.number,
+          surahNumber: surah.number,
           ayahNumber: ayah.numberInSurah,
-          surahName: selectedSurah.englishName,
+          surahName: surah.englishName,
           ayahText: ayah.text,
           createdAt: Date.now(),
         }),
@@ -479,20 +530,45 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const playAyah = async (ayah: QuranAyah) => {
-    const audioAyah = content?.audioByAyah.get(ayah.number);
+  const playAudioAyah = async (
+    audioAyah: QuranAyah | null | undefined,
+    onError?: (message: string) => void,
+  ) => {
+    const reportError = (error: unknown, fallback: string) => {
+      const message = errorMessage(error, fallback);
+      if (!isMountedRef.current) return;
+      if (onError) onError(message);
+      else setNotice(message);
+    };
+
     if (!audioAyah?.audio) {
-      setNotice('Recitation audio is unavailable for this ayah.');
+      reportError(
+        new Error('Recitation audio is unavailable for this ayah.'),
+        'Recitation audio is unavailable for this ayah.',
+      );
       return;
     }
 
-    if (playingAyahNumber === ayah.number) {
-      if (audioState === 'playing') playerRef.current.pause();
-      else if (audioState === 'paused') playerRef.current.play();
+    if (playingAyahNumber === audioAyah.number) {
+      if (audioState === 'playing') {
+        playerRef.current.pause();
+        setAudioState('paused');
+      } else if (audioState === 'paused') {
+        try {
+          playerRef.current.play();
+          setAudioState('playing');
+        } catch (error) {
+          setPlayingAyahNumber(null);
+          setAudioState('error');
+          reportError(error, 'Recitation audio could not be played.');
+        }
+      }
       return;
     }
 
-    setPlayingAyahNumber(ayah.number);
+    const requestId = playbackRequestRef.current + 1;
+    playbackRequestRef.current = requestId;
+    setPlayingAyahNumber(audioAyah.number);
     setAudioState('loading');
     try {
       await playerRef.current.stream(
@@ -500,9 +576,15 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
           editionId: reciterEditionId,
           reciterName: selectedReciter.englishName,
           audioUrl: audioAyah.audio,
-          ayahNumber: ayah.number,
+          ayahNumber: audioAyah.number,
         },
         (state, error) => {
+          if (
+            !isMountedRef.current ||
+            playbackRequestRef.current !== requestId
+          ) {
+            return;
+          }
           setAudioState(state);
           if (
             state === 'stopped' ||
@@ -511,14 +593,25 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
           ) {
             setPlayingAyahNumber(null);
           }
-          if (error) setNotice(error.message);
+          if (error)
+            reportError(error, 'Recitation audio could not be played.');
         },
       );
+      if (isMountedRef.current && playbackRequestRef.current === requestId) {
+        setAudioState(current => (current === 'loading' ? 'playing' : current));
+      }
     } catch (error) {
+      if (!isMountedRef.current || playbackRequestRef.current !== requestId) {
+        return;
+      }
       setPlayingAyahNumber(null);
-      setNotice(errorMessage(error, 'Recitation audio could not be played.'));
+      setAudioState('error');
+      reportError(error, 'Recitation audio could not be played.');
     }
   };
+
+  const playAyah = (ayah: QuranAyah) =>
+    playAudioAyah(content?.audioByAyah.get(ayah.number));
 
   const downloadAyah = async (ayah: QuranAyah) => {
     const audioAyah = content?.audioByAyah.get(ayah.number);
@@ -547,12 +640,17 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
     bookmark,
     surah: surahs.find(item => item.number === bookmark.surahNumber),
   }));
+  const isEnglishTranslation =
+    selectedTranslation.language.toLowerCase() === 'en';
+  const searchScope = isEnglishTranslation
+    ? `Related translation matches in ${selectedTranslation.englishName}. This is not a curated subject index.`
+    : `Word and phrase matches in ${selectedTranslation.englishName}.`;
 
   return (
     <Modal
       visible
       animationType="slide"
-      onRequestClose={selectedSurah ? () => setSelectedSurah(null) : onClose}
+      onRequestClose={selectedSurah ? closeSelectedSurah : closeReader}
     >
       <SafeAreaView style={styles.screen}>
         {selectedSurah ? (
@@ -560,7 +658,7 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
             <View style={styles.header}>
               <Pressable
                 style={styles.navigationButton}
-                onPress={() => setSelectedSurah(null)}
+                onPress={closeSelectedSurah}
                 accessibilityRole="button"
                 accessibilityLabel="Back to surah list"
               >
@@ -584,7 +682,7 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
                 </Pressable>
                 <Pressable
                   style={styles.navigationButton}
-                  onPress={onClose}
+                  onPress={closeReader}
                   accessibilityRole="button"
                   accessibilityLabel="Close Quran reader"
                 >
@@ -648,8 +746,6 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
                   );
                   return (
                     <View
-                      accessible
-                      accessibilityLabel={`Ayah ${item.numberInSurah}`}
                       style={[
                         styles.ayahCard,
                         readingPalette.cardStyle,
@@ -706,7 +802,9 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
                                 ? '★'
                                 : '☆'
                             }
-                            onPress={() => toggleAyahBookmark(item)}
+                            onPress={() =>
+                              toggleAyahBookmark(selectedSurah, item)
+                            }
                           />
                         </View>
                       </View>
@@ -742,7 +840,8 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
                 onViewableItemsChanged={({ viewableItems }) => {
                   const first = viewableItems.find(item => item.isViewable)
                     ?.item as QuranAyah | undefined;
-                  if (first) recordProgress(first.numberInSurah);
+                  if (first)
+                    recordProgress(selectedSurah.number, first.numberInSurah);
                 }}
                 viewabilityConfig={{ itemVisiblePercentThreshold: 55 }}
               />
@@ -776,7 +875,7 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
                 </Pressable>
                 <Pressable
                   style={styles.navigationButton}
-                  onPress={onClose}
+                  onPress={closeReader}
                   accessibilityRole="button"
                   accessibilityLabel="Close Quran reader"
                 >
@@ -790,22 +889,30 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
               <Text style={styles.introText}>
                 Arabic Uthmani text · translation · recitation
               </Text>
+              <Text style={styles.searchHelp}>
+                English topics such as “greed” use a few related translation
+                words. Other languages search exact words and phrases.
+              </Text>
               <View style={styles.searchRow}>
                 <TextInput
                   style={styles.searchInput}
                   value={searchQuery}
-                  onChangeText={setSearchQuery}
+                  onChangeText={changeSearchQuery}
                   onSubmitEditing={runSearch}
-                  placeholder="Search translation"
+                  maxLength={120}
+                  placeholder="Search a word or phrase"
                   placeholderTextColor={COLORS.muted}
                   returnKeyType="search"
-                  accessibilityLabel="Search Quran translation"
+                  accessibilityLabel="Quran translation search field"
+                  accessibilityHint="Search up to 120 characters. English topic words use related translation terms."
                 />
                 <Pressable
                   style={styles.searchButton}
                   onPress={runSearch}
+                  disabled={searchLoading}
                   accessibilityRole="button"
-                  accessibilityLabel="Search Quran"
+                  accessibilityState={{ disabled: searchLoading }}
+                  accessibilityLabel="Search selected Quran translation"
                 >
                   <Text style={styles.searchButtonText}>SEARCH</Text>
                 </Pressable>
@@ -825,7 +932,10 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
                 </Pressable>
                 <Pressable
                   style={styles.textAction}
-                  onPress={() => setShowBookmarks(value => !value)}
+                  onPress={() => {
+                    invalidateSearch();
+                    setShowBookmarks(value => !value);
+                  }}
                   accessibilityRole="button"
                   accessibilityLabel={`Show ${bookmarks.length} saved Quran bookmarks`}
                   accessibilityHint="Opens your saved ayahs."
@@ -836,6 +946,7 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
                   </Text>
                 </Pressable>
               </View>
+
               {progress ? (
                 <Pressable
                   style={styles.continueCard}
@@ -872,6 +983,14 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
               />
             ) : searchResults ? (
               <FlatList
+                ListHeaderComponent={
+                  <Text
+                    style={styles.searchScope}
+                    accessibilityLabel={searchScope}
+                  >
+                    {searchScope}
+                  </Text>
+                }
                 data={searchResults}
                 keyExtractor={match =>
                   `${match.surah.number}:${match.numberInSurah}`
@@ -993,7 +1112,7 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
         }
         onSelect={edition => {
           if (picker === 'translation') selectTranslation(edition);
-          else setReciterEditionId(edition.identifier);
+          else selectReciter(edition);
           setPicker(null);
         }}
         onClose={() => setPicker(null)}
@@ -1500,6 +1619,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.35,
     marginTop: 5,
   },
+  searchHelp: {
+    color: COLORS.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 8,
+  },
   searchRow: { flexDirection: 'row', marginTop: 16, gap: 8 },
   searchInput: {
     flex: 1,
@@ -1714,6 +1839,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 18,
     paddingBottom: 7,
+  },
+  searchScope: {
+    color: COLORS.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 12,
   },
   searchResult: {
     padding: 14,
