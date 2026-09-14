@@ -59,8 +59,8 @@ jobs:
         run: |
           yes | sdkmanager --licenses
           sdkmanager --install \
-            "platforms;android-37" \
-            "build-tools;37.0.0" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
             "ndk;27.1.12297006" \
             "cmake;3.22.1"
 
@@ -121,7 +121,7 @@ jobs:
           aab_path="$(find dist -type f -name '*.aab' -print -quit)"
           test -n "$apk_path"
           test -n "$aab_path"
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose "$apk_path"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk_path"
           jarsigner -verify "$aab_path"
 
   ios:
@@ -151,7 +151,7 @@ jobs:
         run: bundle install
 
       - name: Install CocoaPods dependencies
-        run: bundle exec pod install --project-directory=ios
+        run: bundle exec pod install --project-directory=ios --deployment
 
       - name: Build iOS simulator
         run: xcodebuild -workspace ios/Duavara.xcworkspace -scheme Duavara -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build

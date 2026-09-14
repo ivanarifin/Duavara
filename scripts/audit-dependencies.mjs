@@ -1,10 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 const acceptedVulnerabilities = new Map([
-  [
-    '@react-native/community-cli-plugin',
-    ['@react-native/metro-config', 'metro'],
-  ],
+  ['@react-native/community-cli-plugin', ['@react-native/metro-config']],
   ['@react-native/metro-config', ['metro-config']],
   ['@react-native/virtualized-lists', ['react-native']],
   ['image-size', ['GHSA-w3rx-r6r6-pgpr', 'GHSA-5p2g-fcmc-qvqq']],
@@ -56,6 +53,6 @@ if (unresolved.length) {
 
 if (vulnerabilities.length) {
   console.log(
-    'Accepted build-tool exception: the current Metro/image-size chain only contains GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq, which have no patched upstream release and process formats Metro does not accept as assets.',
+    'Accepted build-tool exceptions: the React Native 0.87.1 Metro chain is awaiting a compatible upstream fix; its image-size findings are GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq.',
   );
 }

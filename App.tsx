@@ -1751,7 +1751,7 @@ function Duavara({
         isBusy={isRefreshing}
         message={message}
         onClose={() => setIsSettingsOpen(false)}
-        onMethod={method => {
+        onMethod={method =>
           updateSettings(current => ({ ...current, method }), true).catch(
             error =>
               setMessage(
@@ -1759,8 +1759,8 @@ function Duavara({
                   ? error.message
                   : 'Unable to update calculation method.',
               ),
-          );
-        }}
+          )
+        }
         onSchool={school => {
           updateSettings(current => ({ ...current, school }), true).catch(
             error =>
@@ -2858,7 +2858,7 @@ function SettingsSheet({
   isBusy: boolean;
   message: string | null;
   onClose: () => void;
-  onMethod: (method: PrayerSettings['method']) => void;
+  onMethod: (method: PrayerSettings['method']) => Promise<void>;
   onSchool: (school: PrayerSettings['school']) => void;
   onNotifications: (enabled: boolean) => void;
   onPrayerReminder: (prayer: PrayerName, enabled: boolean) => void;
@@ -3038,8 +3038,9 @@ function SettingsSheet({
                         isSelected && styles.methodPickerOptionSelected,
                       ]}
                       onPress={() => {
-                        onMethod(method.id);
+                        const saveMethod = onMethod(method.id);
                         setIsMethodPickerOpen(false);
+                        return saveMethod;
                       }}
                       accessibilityRole="radio"
                       accessibilityState={{ selected: isSelected }}

@@ -156,7 +156,7 @@ async function press(
 ): Promise<void> {
   const control = findByAccessibilityLabel(renderer, label);
   await ReactTestRenderer.act(async () => {
-    control.props.onPress();
+    await control.props.onPress();
     await flushMicrotasks();
   });
 }

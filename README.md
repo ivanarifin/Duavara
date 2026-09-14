@@ -36,7 +36,7 @@ No store-console configuration or submission is performed by this repository's s
 
 - Node.js `>= 22.13.0` (from `package.json`)
 - Android development environment for Android builds, including Android SDK/NDK support for the versions configured in `android/build.gradle`:
-  - compile SDK `37`
+  - compile SDK `36`
   - target SDK `36`
   - minimum SDK `24`
   - NDK `27.1.12297006`
