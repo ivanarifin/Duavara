@@ -27,10 +27,24 @@ Before a store release:
 
 1. Commit and publish [`PRIVACY.md`](PRIVACY.md) unchanged or substantially unchanged at a stable public HTTPS URL (for example, the `main` branch of `https://github.com/ivanarifin/Duavara`, a project website, or a repository-owned Pages site). Use that exact URL as the Apple App Store privacy policy URL and Google Play privacy policy URL; a local repository path is not a publishable URL.
 2. Register the Android application ID and the `id.vandev.duavara` iOS bundle ID in the relevant developer accounts.
-3. Configure production signing outside CI. The CI workflow creates a disposable key only to prove that release artifacts can be signed; it must never be used for store uploads.
+3. Configure production signing outside the verification CI workflow. The verification CI workflow creates a disposable key only to prove that release artifacts can be signed; it must never be used for store uploads. The protected manual GitHub release workflow uses the production upload key from Actions secrets.
 4. Complete the Apple App Privacy and Google Play Data safety declarations using the disclosures in [`PRIVACY.md`](PRIVACY.md), then review the generated store previews before submission.
 
 No store-console configuration or submission is performed by this repository's scripts.
+
+## GitHub Android releases
+
+The **Publish Android APK** workflow is manual. It builds a signed APK from an immutable release tag and attaches the APK, its `.sha256` checksum, and `.json` provenance metadata to the matching GitHub Release.
+
+1. In GitHub **Settings → Environments**, create a protected `production` environment with required reviewers. Add these Actions secrets there:
+   - `DUAVARA_UPLOAD_STORE_BASE64` — base64-encoded Android upload `.jks` file.
+   - `DUAVARA_UPLOAD_STORE_PASSWORD`
+   - `DUAVARA_UPLOAD_KEY_ALIAS`
+   - `DUAVARA_UPLOAD_KEY_PASSWORD`
+2. Add a GitHub repository ruleset for `v*` tags that prevents tag updates and deletion. Update `package.json` and the iOS `MARKETING_VERSION` to the intended semantic version, run the release checks, commit the release candidate, then create and push an **annotated** tag named exactly `vX.Y.Z` for that version.
+3. Open **Actions → Publish Android APK → Run workflow**. Enter the existing tag and a positive Android `versionCode` greater than every APK release previously published here. The workflow checks the tag, version, clean checkout, release signature, checksum, and metadata before creating a new GitHub Release.
+
+Keep the signing key and all signing credentials secret; never commit them to the repository. The workflow never overwrites an existing release tag. A GitHub Release APK is for direct distribution; build and submit a separately signed AAB for Google Play.
 
 ## Requirements
 

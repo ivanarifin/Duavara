@@ -1,0 +1,209 @@
+name: Publish Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag matching package.json, for example v1.0.1
+        required: true
+        type: string
+      version_code:
+        description: New, strictly increasing Android versionCode
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-android-apk
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish signed APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Validate release tag and version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use the vX.Y.Z format." >&2
+            exit 1
+          fi
+          if [[ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ]]; then
+            echo "Release tag must be annotated." >&2
+            exit 1
+          fi
+          tag_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+          if [[ "$tag_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo "Checked-out commit does not match the requested tag." >&2
+            exit 1
+          fi
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$RELEASE_TAG" != "v$package_version" ]]; then
+            echo "Release tag $RELEASE_TAG does not match package.json version $package_version." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_VERSION_CODE" =~ ^[1-9][0-9]*$ ]] || ! node -e 'process.exit(Number.isSafeInteger(Number(process.env.RELEASE_VERSION_CODE)) ? 0 : 1)'; then
+            echo "Android version code must be a positive safe integer." >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A GitHub Release already exists for $RELEASE_TAG; releases are not overwritten." >&2
+            exit 1
+          fi
+          while IFS= read -r asset_id; do
+            existing_version_code="$(
+              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                -H 'Accept: application/octet-stream' |
+                node -e 'const { readFileSync } = require("node:fs"); const value = JSON.parse(readFileSync(0, "utf8")).versionCode; if (!Number.isSafeInteger(value) || value < 1) process.exit(1); console.log(value);'
+            )"
+            if (( RELEASE_VERSION_CODE <= existing_version_code )); then
+              echo "Android version code $RELEASE_VERSION_CODE is not greater than published code $existing_version_code." >&2
+              exit 1
+            fi
+          done < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[].assets[]? | select(.name | endswith(".apk.json")) | .id'
+          )
+          {
+            echo "PACKAGE_VERSION=$package_version"
+            echo "RELEASE_COMMIT=$tag_commit"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate release candidate
+        env:
+          DUAVARA_VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          npm run audit:dependencies
+          npm run version:check -- --android-build-code "$DUAVARA_VERSION_CODE"
+          npm run typecheck
+          npm run lint
+          npm test -- --runInBand
+
+      - name: Configure Android release signing
+        env:
+          DUAVARA_UPLOAD_STORE_BASE64: ${{ secrets.DUAVARA_UPLOAD_STORE_BASE64 }}
+          DUAVARA_UPLOAD_STORE_PASSWORD: ${{ secrets.DUAVARA_UPLOAD_STORE_PASSWORD }}
+          DUAVARA_UPLOAD_KEY_ALIAS: ${{ secrets.DUAVARA_UPLOAD_KEY_ALIAS }}
+          DUAVARA_UPLOAD_KEY_PASSWORD: ${{ secrets.DUAVARA_UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for secret_name in \
+            DUAVARA_UPLOAD_STORE_BASE64 \
+            DUAVARA_UPLOAD_STORE_PASSWORD \
+            DUAVARA_UPLOAD_KEY_ALIAS \
+            DUAVARA_UPLOAD_KEY_PASSWORD; do
+            if [[ -z "${!secret_name}" ]]; then
+              echo "Required production signing secret $secret_name is not configured." >&2
+              exit 1
+            fi
+          done
+          keystore_path="$RUNNER_TEMP/duavara-upload.jks"
+          printf '%s' "$DUAVARA_UPLOAD_STORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          {
+            echo "DUAVARA_UPLOAD_STORE_FILE=$keystore_path"
+            echo "DUAVARA_UPLOAD_STORE_PASSWORD=$DUAVARA_UPLOAD_STORE_PASSWORD"
+            echo "DUAVARA_UPLOAD_KEY_ALIAS=$DUAVARA_UPLOAD_KEY_ALIAS"
+            echo "DUAVARA_UPLOAD_KEY_PASSWORD=$DUAVARA_UPLOAD_KEY_PASSWORD"
+            echo "DUAVARA_VERSION_CODE=${{ inputs.version_code }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build signed Android APK
+        run: npm run bundle:apk -- --version-code "$DUAVARA_VERSION_CODE"
+
+      - name: Verify release APK and metadata
+        run: |
+          set -euo pipefail
+          apk_path="dist/duavara-${PACKAGE_VERSION}.apk"
+          metadata_path="${apk_path}.json"
+          test -f "$apk_path"
+          test -f "${apk_path}.sha256"
+          test -f "$metadata_path"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk_path"
+          export apk_path metadata_path
+          node <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const metadata = JSON.parse(readFileSync(process.env.metadata_path, 'utf8'));
+          if (
+            metadata.version !== process.env.PACKAGE_VERSION ||
+            metadata.versionCode !== Number(process.env.DUAVARA_VERSION_CODE) ||
+            metadata.gitSha !== process.env.RELEASE_COMMIT
+          ) {
+            throw new Error('Release metadata does not match the requested tag and version code.');
+          }
+          NODE
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: duavara-${{ inputs.tag }}-apk
+          path: |
+            dist/*.apk
+            dist/*.apk.sha256
+            dist/*.apk.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          remote_tag_commit="$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk '{print $1}')"
+          if [[ "$remote_tag_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "Remote release tag changed after validation." >&2
+            exit 1
+          fi
+          apk_path="dist/duavara-${PACKAGE_VERSION}.apk"
+          gh release create "$RELEASE_TAG" \
+            "$apk_path" \
+            "${apk_path}.sha256" \
+            "${apk_path}.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Duavara $PACKAGE_VERSION" \
+            --generate-notes
