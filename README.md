@@ -48,6 +48,23 @@ The **Publish Android APK** workflow remains manual for stable releases. It buil
 
 Keep the signing key and all signing credentials secret; never commit them to the repository. The workflow never overwrites an existing release tag. A GitHub Release APK is for direct distribution; build and submit a separately signed AAB for Google Play.
 
+## GitHub iOS IPA builds
+
+The **Build iOS IPA** workflow runs after every push to `main` and can also be started manually from **Actions → Build iOS IPA → Run workflow**. It validates the commit with the same dependency audit, version check, typecheck, lint, and test gates used for Android, then archives the `Release` configuration and exports an `.ipa` together with its `.sha256` checksum and `.json` provenance metadata. Artifacts are uploaded to the workflow run; no GitHub Release is created and nothing is submitted to App Store Connect.
+
+The iOS build number defaults to a build timestamp and is passed to the archive as `CURRENT_PROJECT_VERSION`, so it does not need to be committed. Supply `build_number` on a manual run to pin an exact positive value, for example when preparing a TestFlight upload.
+
+Signing behaviour depends on the configured Actions secrets:
+
+- With no secrets configured, the workflow archives without code signing and packages an **unsigned** `.ipa`. This validates that the iOS release configuration compiles, but the artifact cannot be installed on a device.
+- To produce an installable, signed `.ipa`, add these Actions secrets:
+  - `DUAVARA_IOS_DIST_CERT_BASE64` — base64-encoded Apple distribution certificate `.p12`.
+  - `DUAVARA_IOS_DIST_CERT_PASSWORD`
+  - `DUAVARA_IOS_PROVISIONING_PROFILE_BASE64` — base64-encoded `.mobileprovision` for `id.vandev.duavara`.
+  - `DUAVARA_IOS_TEAM_ID`
+
+When signing secrets are present the certificate is imported into a temporary, randomly-passworded keychain that is deleted after the run, and the provisioning profile is checked against the `id.vandev.duavara` bundle identifier before archiving. Select the export type with the `export_method` input (`ad-hoc` by default; `app-store-connect` for TestFlight or App Store uploads). Never commit certificates, provisioning profiles, or their passwords.
+
 ## Requirements
 
 - Node.js `>= 22.13.0` (from `package.json`)
