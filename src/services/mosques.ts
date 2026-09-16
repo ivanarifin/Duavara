@@ -20,6 +20,7 @@ const OVERPASS_USER_AGENT =
 const EARTH_RADIUS_METERS = 6_371_000;
 
 const mosqueCache = new Map<string, { expiresAt: number; results: Mosque[] }>();
+let mosqueCacheGeneration = 0;
 
 type OverpassFetch = typeof fetch;
 
@@ -71,6 +72,7 @@ export class MosqueLookupError extends Error {
 }
 
 export function clearNearbyMosqueCache(): void {
+  mosqueCacheGeneration += 1;
   mosqueCache.clear();
 }
 
@@ -301,8 +303,13 @@ function readCachedMosques(key: string): Mosque[] | null {
   return cloneMosques(cached.results);
 }
 
-function cacheMosques(key: string, results: Mosque[], ttlMs: number): void {
-  if (ttlMs <= 0) return;
+function cacheMosques(
+  key: string,
+  results: Mosque[],
+  ttlMs: number,
+  generation: number,
+): void {
+  if (ttlMs <= 0 || generation !== mosqueCacheGeneration) return;
   if (!mosqueCache.has(key) && mosqueCache.size >= MAX_CACHE_ENTRIES) {
     const oldestKey = mosqueCache.keys().next().value;
     if (oldestKey) mosqueCache.delete(oldestKey);
@@ -464,6 +471,7 @@ export async function getNearbyMosques(
   const maxAttempts = options.maxAttempts ?? endpoints.length;
   validateAttemptCount(maxAttempts, endpoints.length);
 
+  const cacheGeneration = mosqueCacheGeneration;
   const key = cacheKey(coordinates, radiusMeters);
   if (!options.forceRefresh) {
     const cached = readCachedMosques(key);
@@ -511,7 +519,7 @@ export async function getNearbyMosques(
             left.id.localeCompare(right.id),
         )
         .slice(0, MAX_NEARBY_MOSQUES);
-      cacheMosques(key, results, cacheTtlMs);
+      cacheMosques(key, results, cacheTtlMs, cacheGeneration);
       return results;
     } catch (error) {
       lastError = error;

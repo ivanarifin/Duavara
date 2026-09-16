@@ -5,7 +5,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { Linking, NativeModules } from 'react-native';
+import { Alert, Linking, NativeModules } from 'react-native';
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
@@ -62,6 +62,16 @@ jest.mock('@/services/widget', () => ({
   ),
 }));
 
+jest.mock('@/services/mosques', () => {
+  const actual = jest.requireActual('@/services/mosques');
+  return { ...actual, clearNearbyMosqueCache: jest.fn() };
+});
+
+jest.mock('@/services/storage', () => {
+  const actual = jest.requireActual('@/services/storage');
+  return { ...actual, deleteAllLocalData: jest.fn() };
+});
+
 jest.mock('@/components', () => {
   const ReactRuntime = require('react');
   const { View } = require('react-native');
@@ -110,6 +120,12 @@ const notificationMocks = jest.requireMock('@/services/notifications') as {
 };
 const compassMocks = jest.requireMock('@/services/compass') as {
   startQiblaCompass: jest.Mock;
+};
+const mosqueMocks = jest.requireMock('@/services/mosques') as {
+  clearNearbyMosqueCache: jest.Mock;
+};
+const storageMocks = jest.requireMock('@/services/storage') as {
+  deleteAllLocalData: jest.Mock;
 };
 const renderers = new Set<ReactTestRenderer.ReactTestRenderer>();
 let urlListener: ((event: { url: string }) => void) | null = null;
@@ -244,6 +260,38 @@ test('switches a stored manual method back to Automatic through prayer settings'
     SETTINGS_KEY,
     expect.stringContaining('"method":null'),
   );
+});
+
+test('clears the nearby mosque cache when confirmed deletion begins', async () => {
+  let completeDeletion!: () => void;
+  const deletion = new Promise<void>(resolve => {
+    completeDeletion = resolve;
+  });
+  storageMocks.deleteAllLocalData.mockReturnValueOnce(deletion);
+  const alert = jest.spyOn(Alert, 'alert');
+
+  const renderer = await renderApp();
+  await finishSplash(renderer);
+  await press(renderer, 'Open prayer preferences');
+  await press(renderer, 'Delete all local data');
+
+  const destructiveAction = alert.mock.calls[0]?.[2]?.find(
+    action => action.style === 'destructive',
+  );
+  expect(destructiveAction?.text).toBe('Delete data');
+
+  await ReactTestRenderer.act(async () => {
+    destructiveAction?.onPress?.();
+    await flushMicrotasks();
+  });
+
+  expect(storageMocks.deleteAllLocalData).toHaveBeenCalledTimes(1);
+  expect(mosqueMocks.clearNearbyMosqueCache).toHaveBeenCalledTimes(1);
+
+  completeDeletion();
+  await ReactTestRenderer.act(async () => {
+    await flushMicrotasks();
+  });
 });
 
 test('opens About Duavara with installed metadata and verified links', async () => {

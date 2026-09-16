@@ -33,6 +33,14 @@ function fetchMock(body: unknown, ok = true, status = 200): jest.Mock {
   return jest.fn().mockResolvedValue(response(body, ok, status));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('nearby mosque lookup', () => {
   beforeEach(() => {
     clearNearbyMosqueCache();
@@ -362,6 +370,40 @@ describe('nearby mosque lookup', () => {
       options,
     );
 
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not cache a lookup that completes after a cache reset', async () => {
+    const pendingResponse = deferred<MockResponse>();
+    const fetchImpl = jest
+      .fn()
+      .mockReturnValueOnce(pendingResponse.promise)
+      .mockResolvedValueOnce(response({ elements: [] }));
+    const options = { fetchImpl, cacheTtlMs: 60_000 };
+    const firstLookup = getNearbyMosques(
+      { latitude: 0, longitude: 0 },
+      options,
+    );
+
+    clearNearbyMosqueCache();
+    pendingResponse.resolve(
+      response({
+        elements: [
+          {
+            type: 'node',
+            id: 1,
+            lat: 0,
+            lon: 0,
+            tags: { name: 'Stale Mosque' },
+          },
+        ],
+      }),
+    );
+    await expect(firstLookup).resolves.toHaveLength(1);
+
+    await expect(
+      getNearbyMosques({ latitude: 0, longitude: 0 }, options),
+    ).resolves.toEqual([]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

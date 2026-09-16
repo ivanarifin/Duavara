@@ -11,7 +11,6 @@ function flattenedStyle(
 
 describe('SplashScreen', () => {
   test('keeps the crescent separated from the Kaaba emblem', async () => {
-    jest.useFakeTimers();
     let renderer!: ReactTestRenderer.ReactTestRenderer;
 
     try {
@@ -36,7 +35,6 @@ describe('SplashScreen', () => {
       await ReactTestRenderer.act(async () => {
         renderer?.unmount();
       });
-      jest.useRealTimers();
     }
   });
 });

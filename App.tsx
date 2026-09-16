@@ -79,6 +79,7 @@ import {
   cancelFastingNotifications,
   cancelPrayerNotifications,
   clearPrayerWidget,
+  clearNearbyMosqueCache,
   DEFAULT_PRAYER_SETTINGS,
   deleteAllLocalData,
   getCachedSchedule,
@@ -1628,6 +1629,7 @@ function Duavara({
           style: 'destructive',
           onPress: () => {
             const requestToken = beginRequest();
+            clearNearbyMosqueCache();
             setIsRefreshing(true);
             deleteAllLocalData()
               .then(() => {
