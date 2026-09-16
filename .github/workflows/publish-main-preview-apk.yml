@@ -1,0 +1,205 @@
+name: Publish main preview APK
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-android-apk
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish signed preview APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: preview
+
+    steps:
+      - name: Check out pushed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Choose preview release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "$RELEASE_COMMIT" ]]; then
+            echo "Checked-out commit does not match the pushed main commit." >&2
+            exit 1
+          fi
+          max_published_version_code=0
+          while IFS= read -r asset_id; do
+            existing_version_code="$(
+              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                -H 'Accept: application/octet-stream' |
+                node -e 'const { readFileSync } = require("node:fs"); const value = JSON.parse(readFileSync(0, "utf8")).versionCode; if (!Number.isSafeInteger(value) || value < 1) process.exit(1); console.log(value);'
+            )"
+            if (( existing_version_code > max_published_version_code )); then
+              max_published_version_code=$existing_version_code
+            fi
+          done < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[].assets[]? | select(.name | endswith(".apk.json")) | .id'
+          )
+          timestamp_version_code="$(date +%s)"
+          if (( timestamp_version_code > max_published_version_code )); then
+            preview_version_code=$timestamp_version_code
+          else
+            preview_version_code=$((max_published_version_code + 1))
+          fi
+          if (( preview_version_code > 2100000000 )); then
+            echo "Generated Android version code exceeds the Android limit." >&2
+            exit 1
+          fi
+          package_version="$(node -p "require('./package.json').version")"
+          preview_tag="preview-$(git rev-parse --short=12 HEAD)"
+          if gh release view "$preview_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            remote_tag_commit="$(git ls-remote origin "refs/tags/$preview_tag" | awk '{print $1}')"
+            if [[ "$remote_tag_commit" != "$RELEASE_COMMIT" ]]; then
+              echo "Existing preview tag does not match this commit." >&2
+              exit 1
+            fi
+          fi
+          {
+            echo "PACKAGE_VERSION=$package_version"
+            echo "PREVIEW_TAG=$preview_tag"
+            echo "PREVIEW_VERSION_CODE=$preview_version_code"
+            echo "RELEASE_COMMIT=$RELEASE_COMMIT"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate preview candidate
+        run: |
+          npm run audit:dependencies
+          npm run version:check -- --android-build-code "$PREVIEW_VERSION_CODE"
+          npm run typecheck
+          npm run lint
+          npm test -- --runInBand
+
+      - name: Configure Android release signing
+        env:
+          DUAVARA_UPLOAD_STORE_BASE64: ${{ secrets.DUAVARA_UPLOAD_STORE_BASE64 }}
+          DUAVARA_UPLOAD_STORE_PASSWORD: ${{ secrets.DUAVARA_UPLOAD_STORE_PASSWORD }}
+          DUAVARA_UPLOAD_KEY_ALIAS: ${{ secrets.DUAVARA_UPLOAD_KEY_ALIAS }}
+          DUAVARA_UPLOAD_KEY_PASSWORD: ${{ secrets.DUAVARA_UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for secret_name in \
+            DUAVARA_UPLOAD_STORE_BASE64 \
+            DUAVARA_UPLOAD_STORE_PASSWORD \
+            DUAVARA_UPLOAD_KEY_ALIAS \
+            DUAVARA_UPLOAD_KEY_PASSWORD; do
+            if [[ -z "${!secret_name}" ]]; then
+              echo "Required production signing secret $secret_name is not configured." >&2
+              exit 1
+            fi
+          done
+          keystore_path="$RUNNER_TEMP/duavara-upload.jks"
+          printf '%s' "$DUAVARA_UPLOAD_STORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          {
+            echo "DUAVARA_UPLOAD_STORE_FILE=$keystore_path"
+            echo "DUAVARA_UPLOAD_STORE_PASSWORD=$DUAVARA_UPLOAD_STORE_PASSWORD"
+            echo "DUAVARA_UPLOAD_KEY_ALIAS=$DUAVARA_UPLOAD_KEY_ALIAS"
+            echo "DUAVARA_UPLOAD_KEY_PASSWORD=$DUAVARA_UPLOAD_KEY_PASSWORD"
+            echo "DUAVARA_VERSION_CODE=$PREVIEW_VERSION_CODE"
+          } >> "$GITHUB_ENV"
+
+      - name: Build signed Android preview APK
+        run: npm run bundle:apk -- --version-code "$DUAVARA_VERSION_CODE"
+
+      - name: Verify preview APK and metadata
+        run: |
+          set -euo pipefail
+          apk_path="dist/duavara-${PACKAGE_VERSION}.apk"
+          metadata_path="${apk_path}.json"
+          test -f "$apk_path"
+          test -f "${apk_path}.sha256"
+          test -f "$metadata_path"
+          sha256sum --check "${apk_path}.sha256"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk_path"
+          export apk_path metadata_path
+          node <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const metadata = JSON.parse(readFileSync(process.env.metadata_path, 'utf8'));
+          if (
+            metadata.version !== process.env.PACKAGE_VERSION ||
+            metadata.versionCode !== Number(process.env.DUAVARA_VERSION_CODE) ||
+            metadata.gitSha !== process.env.RELEASE_COMMIT
+          ) {
+            throw new Error('Preview metadata does not match the pushed commit and version code.');
+          }
+          NODE
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: duavara-${{ env.PREVIEW_TAG }}-apk
+          path: |
+            dist/*.apk
+            dist/*.apk.sha256
+            dist/*.apk.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          apk_path="dist/duavara-${PACKAGE_VERSION}.apk"
+          if gh release view "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$PREVIEW_TAG" \
+              "$apk_path" \
+              "${apk_path}.sha256" \
+              "${apk_path}.json" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$PREVIEW_TAG" \
+              "$apk_path" \
+              "${apk_path}.sha256" \
+              "${apk_path}.json" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$RELEASE_COMMIT" \
+              --title "Duavara preview ${PREVIEW_TAG#preview-}" \
+              --prerelease \
+              --generate-notes
+          fi

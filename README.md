@@ -34,15 +34,17 @@ No store-console configuration or submission is performed by this repository's s
 
 ## GitHub Android releases
 
-The **Publish Android APK** workflow is manual. It builds a signed APK from an immutable release tag and attaches the APK, its `.sha256` checksum, and `.json` provenance metadata to the matching GitHub Release.
+The **Publish main preview APK** workflow runs after every push to `main`. It signs the exact pushed commit and creates a GitHub prerelease tagged `preview-<short-sha>` with the APK, its `.sha256` checksum, and `.json` provenance metadata. Preview APKs are for direct testing only and must not be submitted to Google Play.
 
-1. In GitHub **Settings → Environments**, create a protected `production` environment with required reviewers. Add these Actions secrets there:
+The **Publish Android APK** workflow remains manual for stable releases. It builds from an immutable `vX.Y.Z` tag and publishes the corresponding non-prerelease GitHub Release.
+
+1. In GitHub **Settings → Environments**, create `preview` for automatic builds and `production` for stable releases. `preview` must not require approval. Protect `production` with required reviewers if desired.
+2. Add the following Actions secrets to **both** environments:
    - `DUAVARA_UPLOAD_STORE_BASE64` — base64-encoded Android upload `.jks` file.
    - `DUAVARA_UPLOAD_STORE_PASSWORD`
    - `DUAVARA_UPLOAD_KEY_ALIAS`
    - `DUAVARA_UPLOAD_KEY_PASSWORD`
-2. Add a GitHub repository ruleset for `v*` tags that prevents tag updates and deletion. Update `package.json` and the iOS `MARKETING_VERSION` to the intended semantic version, run the release checks, commit the release candidate, then create and push an **annotated** tag named exactly `vX.Y.Z` for that version.
-3. Open **Actions → Publish Android APK → Run workflow**. Enter the existing tag and a positive Android `versionCode` greater than every APK release previously published here. The workflow checks the tag, version, clean checkout, release signature, checksum, and metadata before creating a new GitHub Release.
+3. Add a GitHub repository ruleset for `v*` tags that prevents tag updates and deletion. For a stable release, update `package.json` and the iOS `MARKETING_VERSION`, run the release checks, commit the release candidate, then create and push an **annotated** tag named exactly `vX.Y.Z` for that version. Open **Actions → Publish Android APK → Run workflow** and enter the tag plus a positive Android `versionCode` greater than every previously published APK.
 
 Keep the signing key and all signing credentials secret; never commit them to the repository. The workflow never overwrites an existing release tag. A GitHub Release APK is for direct distribution; build and submit a separately signed AAB for Google Play.
 
