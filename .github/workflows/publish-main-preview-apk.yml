@@ -153,7 +153,10 @@ jobs:
           test -f "$apk_path"
           test -f "${apk_path}.sha256"
           test -f "$metadata_path"
-          sha256sum --check "${apk_path}.sha256"
+          (
+            cd dist
+            sha256sum --check "$(basename "${apk_path}.sha256")"
+          )
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk_path"
           export apk_path metadata_path
           node <<'NODE'
