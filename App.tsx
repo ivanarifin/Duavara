@@ -63,6 +63,7 @@ import {
   toDailyPrayerData,
 } from '@/domain';
 import appIconAsset from '@/assets/duavara-app-icon.png';
+import type { AppInfo } from '@/services/appInfo';
 import type { CompassHeading } from '@/services/compass';
 import {
   NearbyMosques,
@@ -82,6 +83,7 @@ import {
   deleteAllLocalData,
   getCachedSchedule,
   getCachedSchedules,
+  getAppInfo,
   getDeviceLocation,
   getLocationProfileStore,
   getNotificationHealth,
@@ -104,7 +106,7 @@ import {
   widgetLocationLabel,
 } from '@/services';
 
-type Tab = 'today' | 'calendar' | 'qibla' | 'discover';
+type Tab = 'today' | 'calendar' | 'qibla' | 'discover' | 'about';
 type DiscoverData = {
   nextHoliday: unknown;
   months: unknown;
@@ -115,6 +117,57 @@ type DiscoverData = {
 type QuranShortcutRequest = { id: number };
 
 const QURAN_SHORTCUT_URL = /^duavara:\/\/quran\/?$/;
+
+const ABOUT_LINKS = [
+  {
+    label: 'Open Duavara source repository',
+    title: 'Source repository',
+    description: 'View Duavara on GitHub.',
+    url: 'https://github.com/ivanarifin/Duavara',
+  },
+  {
+    label: 'View Duavara privacy policy',
+    title: 'Privacy policy',
+    description: 'Read how Duavara handles app data.',
+    url: 'https://github.com/ivanarifin/Duavara/blob/main/PRIVACY.md',
+  },
+  {
+    label: 'View Duavara Apache 2.0 license',
+    title: 'Apache License 2.0',
+    description: 'Read the app license and contribution terms.',
+    url: 'https://github.com/ivanarifin/Duavara/blob/main/LICENSE',
+  },
+  {
+    label: 'View third-party notices',
+    title: 'Third-party notices',
+    description: 'Review sources, licenses, and required attribution.',
+    url: 'https://github.com/ivanarifin/Duavara/blob/main/THIRD_PARTY_NOTICES.md',
+  },
+  {
+    label: 'Open AlAdhan data source',
+    title: 'AlAdhan',
+    description: 'Prayer times, Qibla, and Hijri data.',
+    url: 'https://aladhan.com/prayer-times-api',
+  },
+  {
+    label: 'Open AlQuran.cloud data source',
+    title: 'AlQuran.cloud',
+    description: 'Arabic Quran text, translations, and recitation streams.',
+    url: 'https://alquran.cloud/api',
+  },
+  {
+    label: 'Open OpenStreetMap data source',
+    title: 'OpenStreetMap',
+    description: 'Nearby mosque and direction data.',
+    url: 'https://overpass-api.de/',
+  },
+  {
+    label: 'Open latest Duavara release',
+    title: 'Latest release',
+    description: 'See the newest stable APK on GitHub.',
+    url: 'https://github.com/ivanarifin/Duavara/releases/latest',
+  },
+] as const;
 
 export function isQuranShortcutUrl(url: string | null | undefined): boolean {
   return typeof url === 'string' && QURAN_SHORTCUT_URL.test(url);
@@ -158,6 +211,7 @@ const TAB_ITEMS: { id: Tab; label: string; icon: string }[] = [
   { id: 'calendar', label: 'Calendar', icon: '▦' },
   { id: 'qibla', label: 'Qibla', icon: '⌁' },
   { id: 'discover', label: 'Discover', icon: '✦' },
+  { id: 'about', label: 'About', icon: 'ⓘ' },
 ];
 
 const DEFAULT_PRAYER_ADJUSTMENTS: PrayerAdjustments = {
@@ -844,6 +898,7 @@ function Duavara({
       invalidateQibla();
       setProfileStore(savedStore);
       setCoordinates(profile.coordinates);
+      setEditingProfileId(profile.id);
       syncProfileInputs(profile);
       await refreshForCoordinates(profile, settings, requestToken);
     } catch (error) {
@@ -1072,6 +1127,14 @@ function Duavara({
         batteryOptimization: 'unknown',
         bootRescheduling: 'notApplicable',
       });
+    }
+  }, []);
+
+  const openExternalUrl = useCallback(async (url: string) => {
+    try {
+      await Linking.openURL(url);
+    } catch {
+      setMessage('Unable to open this link on this device.');
     }
   }, []);
 
@@ -1681,6 +1744,7 @@ function Duavara({
     use24HourTime: settings.use24HourTime,
     settings,
     onUseLocation: refreshDeviceLocation,
+    onOpenExternalUrl: openExternalUrl,
     onOpenSettings: openSettings,
     onOpenQuranReader: openQuranReader,
     onRefresh: refreshActive,
@@ -1899,10 +1963,14 @@ function renderTab(props: {
   use24HourTime: boolean;
   settings: PrayerSettings;
   onUseLocation: () => void;
+  onOpenExternalUrl: (url: string) => Promise<void>;
   onOpenSettings: () => void;
   onOpenQuranReader: () => void;
   onRefresh: () => void;
 }) {
+  if (props.activeTab === 'about') {
+    return <AboutView onOpenExternalUrl={props.onOpenExternalUrl} />;
+  }
   if (props.isLoading && !props.today) return <LoadingState />;
   if (!props.coordinates && !props.today) {
     return (
@@ -1984,28 +2052,43 @@ function Header({
 }) {
   return (
     <View style={styles.header}>
-      <View>
+      <View style={styles.headerIdentity}>
         <Text style={styles.wordmark}>Duavara</Text>
-        <Pressable
-          style={styles.locationPill}
-          onPress={onLocation}
-          accessibilityRole="button"
-          accessibilityLabel="Refresh your location"
-        >
+        <View style={styles.locationPill}>
           <Text style={styles.locationDot}>●</Text>
           <Text style={styles.locationText} numberOfLines={1}>
             {formatLocationLabel(regionName, activeProfileName, coordinates)}
           </Text>
+        </View>
+      </View>
+      <View style={styles.headerActions}>
+        <Pressable
+          style={styles.headerRefreshButton}
+          onPress={onLocation}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh location from device"
+          accessibilityHint="Updates your active saved place from device GPS."
+          hitSlop={4}
+        >
+          <LocationPinIcon />
+        </Pressable>
+        <Pressable
+          style={styles.settingsButton}
+          onPress={onSettings}
+          accessibilityRole="button"
+          accessibilityLabel="Open prayer preferences"
+        >
+          <Text style={styles.settingsGlyph}>☷</Text>
         </Pressable>
       </View>
-      <Pressable
-        style={styles.settingsButton}
-        onPress={onSettings}
-        accessibilityRole="button"
-        accessibilityLabel="Open prayer preferences"
-      >
-        <Text style={styles.settingsGlyph}>☷</Text>
-      </Pressable>
+    </View>
+  );
+}
+
+function LocationPinIcon() {
+  return (
+    <View accessible={false} style={styles.locationPinIcon}>
+      <View style={styles.locationPinHole} />
     </View>
   );
 }
@@ -3709,6 +3792,10 @@ function SettingsSheet({
                     );
                   })}
                 </View>
+                <Text style={styles.settingsLabel}>MANUAL COORDINATES</Text>
+                <Text style={styles.settingsHint}>
+                  Enter coordinates manually to update this saved place.
+                </Text>
                 <View style={styles.coordinateRow}>
                   <View style={styles.coordinateField}>
                     <Text style={styles.coordinateLabel}>LATITUDE</Text>
@@ -3798,7 +3885,9 @@ function SettingsSheet({
                   accessibilityLabel="Save place and update prayer times"
                 >
                   <Text style={styles.saveLocationText}>
-                    {isBusy ? 'UPDATING…' : 'SAVE PLACE & UPDATE TIMES'}
+                    {isBusy
+                      ? 'UPDATING…'
+                      : 'SAVE MANUAL COORDINATES & UPDATE TIMES'}
                   </Text>
                 </Pressable>
 
@@ -3828,6 +3917,147 @@ function SettingsSheet({
   );
 }
 
+function AboutView({
+  onOpenExternalUrl,
+}: {
+  onOpenExternalUrl: (url: string) => Promise<void>;
+}) {
+  const [appInfo, setAppInfo] = useState<AppInfo>({
+    version: 'Unavailable',
+    build: null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    getAppInfo().then(info => {
+      if (!cancelled) setAppInfo(info);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <View style={styles.aboutView} accessibilityLabel="About Duavara screen">
+      <View style={styles.aboutHero}>
+        <View style={styles.aboutHeroTop}>
+          <Image source={appIconAsset} style={styles.aboutAppIcon} />
+          <View style={styles.aboutHeroCopy}>
+            <Text style={styles.aboutHeroKicker}>YOUR WORSHIP COMPANION</Text>
+            <Text style={styles.aboutHeroTitle}>Duavara</Text>
+          </View>
+        </View>
+        <Text style={styles.aboutHeroDescription}>
+          Prayer times, Qibla, Quran, and mindful worship tools—designed to work
+          quietly around your day.
+        </Text>
+        <View style={styles.aboutFeatureRow}>
+          {['PRAYER', 'QIBLA', 'QURAN'].map(feature => (
+            <View key={feature} style={styles.aboutFeaturePill}>
+              <Text style={styles.aboutFeatureText}>{feature}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.aboutVersionCard}>
+        <View style={styles.aboutVersionHeader}>
+          <Text style={styles.aboutVersionLabel}>INSTALLED ON THIS DEVICE</Text>
+          <View style={styles.aboutInstalledBadge}>
+            <View style={styles.aboutInstalledDot} />
+            <Text style={styles.aboutInstalledText}>LOCAL APP</Text>
+          </View>
+        </View>
+        <Text
+          style={styles.aboutVersionValue}
+          accessibilityLabel={`Duavara version ${appInfo.version}${
+            appInfo.build ? `, build ${appInfo.build}` : ''
+          }`}
+        >
+          Version {appInfo.version}
+          {appInfo.build ? ` · Build ${appInfo.build}` : ''}
+        </Text>
+      </View>
+
+      <View
+        style={styles.aboutPrivacyCard}
+        accessibilityLabel="Privacy by design: no account, no analytics, data stays on this device"
+      >
+        <Text style={styles.aboutPrivacyKicker}>PRIVATE BY DESIGN</Text>
+        <Text style={styles.aboutPrivacyTitle}>
+          Your practice stays personal.
+        </Text>
+        <Text style={styles.aboutPrivacyDescription}>
+          Duavara does not create accounts, use analytics, or operate an app
+          backend.
+        </Text>
+        <View style={styles.aboutPrivacyFacts}>
+          {[
+            'No account required',
+            'No analytics tracking',
+            'Data stays on this device',
+          ].map(fact => (
+            <View key={fact} style={styles.aboutPrivacyFact}>
+              <Text style={styles.aboutPrivacyCheck}>✓</Text>
+              <Text style={styles.aboutPrivacyFactText}>{fact}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <Text style={styles.aboutSectionLabel}>APP & PRIVACY</Text>
+      {ABOUT_LINKS.slice(0, 4).map(link => (
+        <AboutLink
+          key={link.label}
+          {...link}
+          onPress={() => onOpenExternalUrl(link.url)}
+        />
+      ))}
+      <Text style={styles.aboutSectionLabel}>DATA SOURCES</Text>
+      {ABOUT_LINKS.slice(4, 7).map(link => (
+        <AboutLink
+          key={link.label}
+          {...link}
+          onPress={() => onOpenExternalUrl(link.url)}
+        />
+      ))}
+      <Text style={styles.aboutSectionLabel}>UPDATES</Text>
+      <AboutLink
+        {...ABOUT_LINKS[7]}
+        onPress={() => onOpenExternalUrl(ABOUT_LINKS[7].url)}
+      />
+    </View>
+  );
+}
+
+function AboutLink({
+  title,
+  description,
+  label,
+  onPress,
+}: {
+  title: string;
+  description: string;
+  label: string;
+  onPress: () => Promise<void>;
+}) {
+  return (
+    <Pressable
+      style={styles.aboutLink}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint="Opens in your browser."
+    >
+      <View style={styles.aboutLinkText}>
+        <Text style={styles.aboutLinkTitle}>{title}</Text>
+        <Text style={styles.aboutLinkDescription}>{description}</Text>
+      </View>
+      <Text style={styles.aboutLinkChevron}>↗</Text>
+    </Pressable>
+  );
+}
+
 function HealthRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.healthRow}>
@@ -3842,10 +4072,11 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 20 },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-start',
+    gap: 12,
     marginBottom: 26,
   },
+  headerIdentity: { flex: 1, flexShrink: 1 },
   wordmark: {
     color: COLORS.cream,
     fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
@@ -3857,16 +4088,44 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 1,
     gap: 6,
     marginTop: 3,
-    maxWidth: 230,
   },
   locationDot: { color: COLORS.mint, fontSize: 10 },
   locationText: {
     color: COLORS.muted,
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: 0.2,
+  },
+  headerActions: { flexDirection: 'row', flexShrink: 0, gap: 8 },
+  headerRefreshButton: {
+    alignItems: 'center',
+    backgroundColor: COLORS.inkSoft,
+    borderColor: COLORS.line,
+    borderRadius: 21,
+    borderWidth: 1,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  locationPinIcon: {
+    alignItems: 'center',
+    backgroundColor: COLORS.cream,
+    borderBottomRightRadius: 3,
+    borderRadius: 9,
+    height: 18,
+    justifyContent: 'center',
+    transform: [{ rotate: '45deg' }],
+    width: 18,
+  },
+  locationPinHole: {
+    backgroundColor: COLORS.inkSoft,
+    borderRadius: 3,
+    height: 6,
+    width: 6,
   },
   settingsButton: {
     width: 42,
@@ -4234,7 +4493,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     justifyContent: 'space-around',
   },
-  tabItem: { width: 67, alignItems: 'center', gap: 3, paddingVertical: 3 },
+  tabItem: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: 3 },
   tabIcon: { color: '#759187', fontSize: 20, lineHeight: 23 },
   tabIconActive: { color: COLORS.gold },
   tabLabel: { color: '#759187', fontSize: 10, fontWeight: '700' },
@@ -4772,6 +5031,172 @@ const styles = StyleSheet.create({
   },
   methodPickerHeading: { paddingBottom: 14 },
   methodPickerList: { gap: 8, paddingBottom: 38 },
+  aboutView: { paddingBottom: 20 },
+  aboutHero: {
+    backgroundColor: COLORS.moss,
+    borderColor: 'rgba(199, 240, 218, 0.18)',
+    borderRadius: 24,
+    borderWidth: 1,
+    overflow: 'hidden',
+    padding: 18,
+  },
+  aboutHeroTop: { alignItems: 'center', flexDirection: 'row', gap: 13 },
+  aboutAppIcon: {
+    borderColor: 'rgba(255, 248, 232, 0.34)',
+    borderRadius: 14,
+    borderWidth: 1,
+    height: 54,
+    width: 54,
+  },
+  aboutHeroCopy: { flex: 1 },
+  aboutHeroKicker: {
+    color: COLORS.mint,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.05,
+  },
+  aboutHeroTitle: {
+    color: COLORS.cream,
+    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
+    fontSize: 28,
+    letterSpacing: -0.5,
+    lineHeight: 33,
+    marginTop: 2,
+  },
+  aboutHeroDescription: {
+    color: COLORS.parchment,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 16,
+  },
+  aboutFeatureRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 15,
+  },
+  aboutFeaturePill: {
+    backgroundColor: 'rgba(255, 248, 232, 0.12)',
+    borderColor: 'rgba(255, 248, 232, 0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  aboutFeatureText: {
+    color: COLORS.mintBright,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.75,
+  },
+  aboutVersionCard: {
+    backgroundColor: COLORS.inkSoft,
+    borderColor: COLORS.line,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 12,
+    padding: 15,
+  },
+  aboutVersionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  aboutVersionLabel: {
+    color: COLORS.gold,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+  },
+  aboutInstalledBadge: { alignItems: 'center', flexDirection: 'row', gap: 5 },
+  aboutInstalledDot: {
+    backgroundColor: COLORS.mint,
+    borderRadius: 3,
+    height: 6,
+    width: 6,
+  },
+  aboutInstalledText: {
+    color: COLORS.mint,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.75,
+  },
+  aboutVersionValue: {
+    color: COLORS.cream,
+    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
+    fontSize: 20,
+    marginTop: 7,
+  },
+  aboutPrivacyCard: {
+    backgroundColor: '#E8DEC8',
+    borderColor: '#D6C9AD',
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 12,
+    padding: 15,
+  },
+  aboutPrivacyKicker: {
+    color: COLORS.moss,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+  },
+  aboutPrivacyTitle: {
+    color: COLORS.inkSoft,
+    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
+    fontSize: 20,
+    letterSpacing: -0.25,
+    marginTop: 5,
+  },
+  aboutPrivacyDescription: {
+    color: '#65756A',
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 5,
+  },
+  aboutPrivacyFacts: { gap: 7, marginTop: 13 },
+  aboutPrivacyFact: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  aboutPrivacyCheck: {
+    color: COLORS.moss,
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 15,
+  },
+  aboutPrivacyFactText: {
+    color: COLORS.inkSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.15,
+  },
+  aboutSectionLabel: {
+    color: COLORS.mint,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.15,
+    marginBottom: 9,
+    marginTop: 20,
+  },
+  aboutLink: {
+    alignItems: 'center',
+    backgroundColor: COLORS.cream,
+    borderColor: '#D6C9AD',
+    borderRadius: 13,
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginBottom: 8,
+    minHeight: 64,
+    paddingHorizontal: 15,
+    paddingVertical: 11,
+  },
+  aboutLinkText: { flex: 1, paddingRight: 12 },
+  aboutLinkTitle: { color: COLORS.inkSoft, fontSize: 14, fontWeight: '800' },
+  aboutLinkDescription: {
+    color: '#65756A',
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 3,
+  },
+  aboutLinkChevron: { color: COLORS.moss, fontSize: 21, fontWeight: '700' },
   methodPickerOption: {
     alignItems: 'center',
     backgroundColor: COLORS.cream,
@@ -4871,6 +5296,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     padding: 10,
   },
+
   profileTextInput: {
     backgroundColor: COLORS.cream,
     borderColor: '#D6C9AD',

@@ -111,7 +111,7 @@ jobs:
           npm run version:check -- --android-build-code "$PREVIEW_VERSION_CODE"
           npm run typecheck
           npm run lint
-          npm test -- --runInBand
+          npm run test:coverage -- --runInBand
 
       - name: Configure Android release signing
         env:

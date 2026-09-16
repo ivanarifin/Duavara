@@ -9,8 +9,29 @@ permissions:
   contents: read
 
 jobs:
+  require-forked-pull-request:
+    name: Require forks for non-owner pull requests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject non-owner branches in the upstream repository
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          UPSTREAM_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REPOSITORY" = "$UPSTREAM_REPOSITORY" ] && [ "$PR_AUTHOR" != "$REPOSITORY_OWNER" ]; then
+            echo "Pull requests from branches in $UPSTREAM_REPOSITORY must be opened by $REPOSITORY_OWNER. Other contributors must use a fork." >&2
+            exit 1
+          fi
+
   dependency-audit:
     name: Dependency audit
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository ||
+      github.event.pull_request.user.login == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -31,7 +52,11 @@ jobs:
         run: npm run audit:dependencies
 
   quality:
-    name: Lint, test, and Android release validation
+    name: Lint, coverage, and Android release validation
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository ||
+      github.event.pull_request.user.login == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -78,8 +103,17 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test
-        run: npm test -- --runInBand
+      - name: Test with coverage
+        run: npm run test:coverage -- --runInBand
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build Android debug
         run: ./gradlew assembleDebug
@@ -128,6 +162,10 @@ jobs:
 
   ios:
     name: Build iOS simulator
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository ||
+      github.event.pull_request.user.login == github.repository_owner
     runs-on: macos-latest
     timeout-minutes: 45
 

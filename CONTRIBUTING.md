@@ -40,7 +40,7 @@ Duavara requires Node.js `>= 22.13.0`. From the repository root, install JavaScr
 npm install
 ```
 
-`npm install` enables the Husky pre-commit hook, which runs `npm run lint`. Run tests before opening a pull request; the hook intentionally does not run the full test suite so commits stay quick.
+`npm install` enables the Husky pre-commit hook, which runs `npm run lint:staged` for staged JavaScript and TypeScript files. Run tests before opening a pull request; the hook intentionally does not run the full test suite so commits stay quick.
 
 For iOS development, use macOS with Xcode and CocoaPods, then install the Ruby-managed native dependencies after cloning and whenever native dependencies change:
 
@@ -49,7 +49,7 @@ bundle install
 bundle exec pod install --project-directory=ios
 ```
 
-Android development requires the Android SDK/NDK versions configured in `android/build.gradle` (compile SDK `37`, target SDK `36`, minimum SDK `24`, and NDK `27.1.12297006`). iOS builds use deployment target `15.1`. Complete the official [React Native environment setup](https://reactnative.dev/docs/set-up-your-environment) for the platform you will run.
+Android development requires the Android SDK/NDK versions configured in `android/build.gradle` (compile SDK `36`, target SDK `36`, minimum SDK `24`, and NDK `27.1.12297006`). iOS builds use deployment target `15.1`. Complete the official [React Native environment setup](https://reactnative.dev/docs/set-up-your-environment) for the platform you will run.
 
 ### 4. Run checks
 
@@ -72,7 +72,7 @@ Keep Metro running while using a debug build. iOS requires Pods to be installed 
 
 ### 5. Open a pull request
 
-Push your branch to your fork and open a pull request against the upstream default branch. Explain the user-visible change, implementation notes, and how you tested it. Keep each pull request focused; split unrelated fixes into separate pull requests.
+Repository owners may push a pull-request branch to `ivanarifin/Duavara` and open a pull request against `main`. Other contributors must push a branch to a personal fork, then open a pull request against the upstream `main` branch; CI rejects non-owner pull requests whose source branch belongs to the upstream repository. Explain the user-visible change, implementation notes, and how you tested it. Keep each pull request focused; split unrelated fixes into separate pull requests.
 
 ## App-specific considerations
 

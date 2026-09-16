@@ -2,6 +2,8 @@
 
 <!-- What changed, and why? Link an issue if applicable. -->
 
+- [ ] I am the repository owner using an upstream branch, or this pull request comes from a personal fork.
+
 ## Testing
 
 - [ ] `npm test -- --runInBand`
