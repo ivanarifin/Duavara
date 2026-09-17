@@ -1,4 +1,5 @@
 export * from '@/services/aladhan';
+export * from '@/services/appInfo';
 export * from '@/services/compass';
 export * from '@/services/location';
 export * from '@/services/notifications';

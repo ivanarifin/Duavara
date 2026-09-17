@@ -9,12 +9,14 @@
     "bundle:apk": "node scripts/bundle-android.mjs apk",
     "ios": "react-native run-ios",
     "lint": "eslint .",
+    "lint:staged": "node scripts/lint-staged.cjs",
     "typecheck": "tsc --noEmit",
     "version:check": "node scripts/check-version.mjs",
-    "ci": "npm run version:check && npm run typecheck && npm run lint && npm test -- --runInBand",
+    "ci": "npm run version:check && npm run typecheck && npm run lint && npm run test:coverage -- --runInBand",
     "prepare": "husky",
     "start": "react-native start",
-    "test": "jest"
+    "test": "jest",
+    "test:coverage": "jest --coverage"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",

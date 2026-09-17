@@ -1,4 +1,5 @@
 import {
+  clearNearbyMosqueCache,
   getNearbyMosques,
   MAX_NEARBY_MOSQUES,
   MAX_RADIUS_METERS,
@@ -11,13 +12,20 @@ type MockResponse = {
   ok: boolean;
   status: number;
   json: jest.Mock;
+  headers: { get: jest.Mock };
 };
 
-function response(body: unknown, ok = true, status = 200): MockResponse {
+function response(
+  body: unknown,
+  ok = true,
+  status = 200,
+  retryAfter: string | null = null,
+): MockResponse {
   return {
     ok,
     status,
     json: jest.fn().mockResolvedValue(body),
+    headers: { get: jest.fn(() => retryAfter) },
   };
 }
 
@@ -25,7 +33,19 @@ function fetchMock(body: unknown, ok = true, status = 200): jest.Mock {
   return jest.fn().mockResolvedValue(response(body, ok, status));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('nearby mosque lookup', () => {
+  beforeEach(() => {
+    clearNearbyMosqueCache();
+  });
+
   test('times out while parsing response JSON', async () => {
     jest.useFakeTimers();
     try {
@@ -69,7 +89,7 @@ describe('nearby mosque lookup', () => {
       'User-Agent': 'Duavara/1.0 (+https://github.com/ivanarifin/Duavara)',
     });
     const query = new URLSearchParams(String(init.body)).get('data');
-    expect(query).toContain('[out:json][timeout:25]');
+    expect(query).toContain('[out:json][timeout:10]');
     expect(query).toContain('"religion"~"^(muslim|islam)$",i');
     expect(query).toContain('nwr["building"="mosque"]');
     expect(query).toContain('(around:5000,35.681236,139.767125)');
@@ -222,11 +242,249 @@ describe('nearby mosque lookup', () => {
         {
           fetchImpl,
           endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+          retryBaseDelayMs: 0,
+          retryMaxDelayMs: 0,
         },
       ),
     ).resolves.toEqual([]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl.mock.calls[1][0]).toBe('https://fallback.example/api');
+  });
+
+  test('falls back after a network failure', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('network offline'))
+      .mockResolvedValueOnce(response({ elements: [] }));
+
+    await expect(
+      getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        {
+          fetchImpl,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+          retryBaseDelayMs: 0,
+          retryMaxDelayMs: 0,
+        },
+      ),
+    ).resolves.toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1][0]).toBe('https://fallback.example/api');
+  });
+
+  test('fails over immediately when an endpoint rate limits the search', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce(response({ error: 'busy' }, false, 429, '60'))
+      .mockResolvedValueOnce(response({ elements: [] }));
+
+    await expect(
+      getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        {
+          fetchImpl,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+          retryBaseDelayMs: 250,
+          retryMaxDelayMs: 2_000,
+        },
+      ),
+    ).resolves.toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1][0]).toBe('https://fallback.example/api');
+  });
+
+  test('falls back when a rate-limited endpoint returns a non-JSON body', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: { get: jest.fn(() => null) },
+        json: jest.fn().mockRejectedValue(new Error('HTML response')),
+      } as unknown as Response)
+      .mockResolvedValueOnce(response({ elements: [] }));
+
+    await expect(
+      getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        {
+          fetchImpl,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+          retryBaseDelayMs: 0,
+          retryMaxDelayMs: 0,
+        },
+      ),
+    ).resolves.toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test('falls back after a malformed successful response', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce(response({ error: 'invalid Overpass payload' }))
+      .mockResolvedValueOnce(
+        response({
+          elements: [
+            {
+              type: 'node',
+              id: 42,
+              lat: 0.001,
+              lon: 0,
+              tags: { name: 'Fallback Mosque' },
+            },
+          ],
+        }),
+      );
+
+    await expect(
+      getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        {
+          fetchImpl,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+          retryBaseDelayMs: 0,
+          retryMaxDelayMs: 0,
+        },
+      ),
+    ).resolves.toMatchObject([{ id: 'node/42', name: 'Fallback Mosque' }]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0][0]).toBe(OVERPASS_ENDPOINT);
+    expect(fetchImpl.mock.calls[1][0]).toBe('https://fallback.example/api');
+  });
+
+  test('does not fetch or fall back after caller cancellation', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = fetchMock({ elements: [] });
+
+    await expect(
+      getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        {
+          fetchImpl,
+          signal: controller.signal,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test('cancels an in-flight lookup without trying a fallback endpoint', async () => {
+    const controller = new AbortController();
+    const fetchImpl = jest.fn(() => new Promise<never>(() => undefined));
+    const lookup = getNearbyMosques(
+      { latitude: 0, longitude: 0 },
+      {
+        fetchImpl,
+        signal: controller.signal,
+        endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+      },
+    );
+
+    controller.abort();
+
+    await expect(lookup).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not share cached results between distinct coordinates', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce(response({ elements: [] }))
+      .mockResolvedValueOnce(response({ elements: [] }));
+    const options = { fetchImpl, cacheTtlMs: 60_000 };
+
+    await getNearbyMosques(
+      { latitude: -6.200001, longitude: 106.816666 },
+      options,
+    );
+    await getNearbyMosques(
+      { latitude: -6.200002, longitude: 106.816666 },
+      options,
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not cache a lookup that completes after a cache reset', async () => {
+    const pendingResponse = deferred<MockResponse>();
+    const fetchImpl = jest
+      .fn()
+      .mockReturnValueOnce(pendingResponse.promise)
+      .mockResolvedValueOnce(response({ elements: [] }));
+    const options = { fetchImpl, cacheTtlMs: 60_000 };
+    const firstLookup = getNearbyMosques(
+      { latitude: 0, longitude: 0 },
+      options,
+    );
+
+    clearNearbyMosqueCache();
+    pendingResponse.resolve(
+      response({
+        elements: [
+          {
+            type: 'node',
+            id: 1,
+            lat: 0,
+            lon: 0,
+            tags: { name: 'Stale Mosque' },
+          },
+        ],
+      }),
+    );
+    await expect(firstLookup).resolves.toHaveLength(1);
+
+    await expect(
+      getNearbyMosques({ latitude: 0, longitude: 0 }, options),
+    ).resolves.toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test('returns cached results until the cache entry expires', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const fetchImpl = jest
+        .fn()
+        .mockResolvedValueOnce(
+          response({
+            elements: [
+              {
+                type: 'node',
+                id: 1,
+                lat: 0,
+                lon: 0,
+                tags: { name: 'Cached Mosque' },
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(response({ elements: [] }));
+      const options = { fetchImpl, cacheTtlMs: 1_000 };
+
+      const firstResults = await getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        options,
+      );
+      expect(firstResults).toHaveLength(1);
+      firstResults[0].name = 'Mutated locally';
+      const cachedResults = await getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        options,
+      );
+      expect(cachedResults).toHaveLength(1);
+      expect(cachedResults[0].name).toBe('Cached Mosque');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+      jest.advanceTimersByTime(1_001);
+      await expect(
+        getNearbyMosques({ latitude: 0, longitude: 0 }, options),
+      ).resolves.toEqual([]);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('times out an injected fetch', async () => {

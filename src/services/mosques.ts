@@ -10,9 +10,17 @@ export const MAX_RADIUS_METERS = 5_000;
 export const MAX_NEARBY_MOSQUES = 50;
 
 const DEFAULT_TIMEOUT_MS = 12_000;
+const DEFAULT_RETRY_BASE_DELAY_MS = 250;
+const DEFAULT_RETRY_MAX_DELAY_MS = 2_000;
+const MAX_OVERPASS_TIMEOUT_SECONDS = 10;
+const RESPONSE_GRACE_MS = 1_000;
+const MAX_CACHE_ENTRIES = 20;
 const OVERPASS_USER_AGENT =
   'Duavara/1.0 (+https://github.com/ivanarifin/Duavara)';
 const EARTH_RADIUS_METERS = 6_371_000;
+
+const mosqueCache = new Map<string, { expiresAt: number; results: Mosque[] }>();
+let mosqueCacheGeneration = 0;
 
 type OverpassFetch = typeof fetch;
 
@@ -39,15 +47,33 @@ export interface Mosque {
 export interface MosqueLookupOptions {
   radiusMeters?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   fetchImpl?: OverpassFetch;
   endpoints?: readonly string[];
+  maxAttempts?: number;
+  retryBaseDelayMs?: number;
+  retryMaxDelayMs?: number;
+  random?: () => number;
+  cacheTtlMs?: number;
+  forceRefresh?: boolean;
 }
 
+type MosqueLookupErrorCode = 'ABORTED' | 'TIMEOUT' | 'INVALID_RESPONSE';
+
 export class MosqueLookupError extends Error {
-  constructor(message: string, public readonly statusCode?: number) {
+  constructor(
+    message: string,
+    public readonly statusCode?: number,
+    public readonly code?: MosqueLookupErrorCode,
+  ) {
     super(message);
     this.name = 'MosqueLookupError';
   }
+}
+
+export function clearNearbyMosqueCache(): void {
+  mosqueCacheGeneration += 1;
+  mosqueCache.clear();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,9 +117,39 @@ function validateTimeout(timeoutMs: number): void {
   validatePositiveNumber(timeoutMs, 'Timeout');
 }
 
-function buildQuery(coordinates: Coordinates, radiusMeters: number): string {
+function validateNonNegativeNumber(value: number, label: string): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new MosqueLookupError(
+      `${label} must be a non-negative finite number`,
+    );
+  }
+}
+
+function validateAttemptCount(attempts: number, maximum: number): void {
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > maximum) {
+    throw new MosqueLookupError(
+      `Attempts must be a whole number from 1 to ${maximum}`,
+    );
+  }
+}
+
+function overpassTimeoutSeconds(timeoutMs: number): number {
+  return Math.max(
+    1,
+    Math.min(
+      MAX_OVERPASS_TIMEOUT_SECONDS,
+      Math.floor(Math.max(0, timeoutMs - RESPONSE_GRACE_MS) / 1_000),
+    ),
+  );
+}
+
+function buildQuery(
+  coordinates: Coordinates,
+  radiusMeters: number,
+  timeoutSeconds: number,
+): string {
   const around = `(around:${radiusMeters},${coordinates.latitude},${coordinates.longitude})`;
-  return `[out:json][timeout:25];(nwr["amenity"="place_of_worship"]["religion"~"^(muslim|islam)$",i]${around};nwr["building"="mosque"]${around};);out center tags;`;
+  return `[out:json][timeout:${timeoutSeconds}];(nwr["amenity"="place_of_worship"]["religion"~"^(muslim|islam)$",i]${around};nwr["building"="mosque"]${around};);out center tags;`;
 }
 
 function isOSMTags(value: unknown): value is OSMTags {
@@ -198,9 +254,99 @@ function normalizeElement(
 
 function responseElements(body: unknown): OSMElement[] {
   if (!isRecord(body) || !Array.isArray(body.elements)) {
-    throw new MosqueLookupError('Overpass returned an unexpected response');
+    throw new MosqueLookupError(
+      'Overpass returned an unexpected response',
+      undefined,
+      'INVALID_RESPONSE',
+    );
   }
   return body.elements.filter(isOSMElement);
+}
+
+function abortError(): MosqueLookupError {
+  return new MosqueLookupError(
+    'Overpass request was cancelled',
+    undefined,
+    'ABORTED',
+  );
+}
+
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof MosqueLookupError)) return true;
+  if (error.code === 'ABORTED') return false;
+  if (error.code === 'INVALID_RESPONSE') return true;
+  return (
+    error.code === 'TIMEOUT' ||
+    error.statusCode === undefined ||
+    error.statusCode === 408 ||
+    error.statusCode === 429 ||
+    error.statusCode >= 500
+  );
+}
+
+function cacheKey(coordinates: Coordinates, radiusMeters: number): string {
+  return `${coordinates.latitude}:${coordinates.longitude}:${radiusMeters}`;
+}
+
+function cloneMosques(results: Mosque[]): Mosque[] {
+  return results.map(mosque => ({ ...mosque }));
+}
+
+function readCachedMosques(key: string): Mosque[] | null {
+  const cached = mosqueCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    mosqueCache.delete(key);
+    return null;
+  }
+  return cloneMosques(cached.results);
+}
+
+function cacheMosques(
+  key: string,
+  results: Mosque[],
+  ttlMs: number,
+  generation: number,
+): void {
+  if (ttlMs <= 0 || generation !== mosqueCacheGeneration) return;
+  if (!mosqueCache.has(key) && mosqueCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = mosqueCache.keys().next().value;
+    if (oldestKey) mosqueCache.delete(oldestKey);
+  }
+  mosqueCache.set(key, {
+    expiresAt: Date.now() + ttlMs,
+    results: cloneMosques(results),
+  });
+}
+
+function retryDelayMs(
+  error: unknown,
+  retryIndex: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+  random: () => number,
+): number {
+  if (error instanceof MosqueLookupError && error.statusCode === 429) {
+    return 0;
+  }
+  const cap = Math.min(maxDelayMs, baseDelayMs * 2 ** retryIndex);
+  return Math.floor(Math.max(0, Math.min(1, random())) * (cap + 1));
+}
+
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  if (delayMs <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function request(
@@ -208,11 +354,23 @@ async function request(
   query: string,
   fetchImpl: OverpassFetch,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<{ response: Response; body: unknown }> {
+  if (signal?.aborted) throw abortError();
+
   const controller =
     typeof AbortController === 'undefined' ? undefined : new AbortController();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  const externalAbortPromise = new Promise<never>((_, reject) => {
+    const onAbort = () => {
+      controller?.abort();
+      reject(abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    removeAbortListener = () => signal?.removeEventListener('abort', onAbort);
+  });
   const fetchPromise = fetchImpl(endpoint, {
     method: 'POST',
     headers: {
@@ -229,6 +387,8 @@ async function request(
       reject(
         new MosqueLookupError(
           `Overpass request timed out after ${timeoutMs}ms`,
+          undefined,
+          'TIMEOUT',
         ),
       );
     }, timeoutMs);
@@ -237,27 +397,43 @@ async function request(
   try {
     let response: Response;
     try {
-      response = await Promise.race([fetchPromise, timeoutPromise]);
+      response = await Promise.race([
+        fetchPromise,
+        timeoutPromise,
+        externalAbortPromise,
+      ]);
     } catch (error) {
-      if (timedOut) throw error;
+      if (timedOut || signal?.aborted || error instanceof MosqueLookupError) {
+        throw error;
+      }
       const message =
         error instanceof Error ? error.message : 'Network request failed';
       throw new MosqueLookupError(`Overpass request failed: ${message}`);
     }
 
+    if (!response.ok) return { response, body: null };
+
     let body: unknown;
     try {
-      body = await Promise.race([response.json(), timeoutPromise]);
+      body = await Promise.race([
+        response.json(),
+        timeoutPromise,
+        externalAbortPromise,
+      ]);
     } catch (error) {
-      if (timedOut) throw error;
+      if (timedOut || signal?.aborted || error instanceof MosqueLookupError) {
+        throw error;
+      }
       throw new MosqueLookupError(
         `Overpass returned invalid JSON (HTTP ${response.status})`,
         response.status,
+        'INVALID_RESPONSE',
       );
     }
     return { response, body };
   } finally {
     if (timer) clearTimeout(timer);
+    removeAbortListener?.();
   }
 }
 
@@ -268,10 +444,22 @@ export async function getNearbyMosques(
   validateCoordinates(coordinates);
   const radiusMeters = options.radiusMeters ?? MAX_RADIUS_METERS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const retryBaseDelayMs =
+    options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+  const retryMaxDelayMs = options.retryMaxDelayMs ?? DEFAULT_RETRY_MAX_DELAY_MS;
+  const cacheTtlMs = options.cacheTtlMs ?? 0;
   validateRadius(radiusMeters);
   validateTimeout(timeoutMs);
+  validateNonNegativeNumber(retryBaseDelayMs, 'Retry base delay');
+  validateNonNegativeNumber(retryMaxDelayMs, 'Retry maximum delay');
+  validateNonNegativeNumber(cacheTtlMs, 'Cache TTL');
+  if (retryMaxDelayMs < retryBaseDelayMs) {
+    throw new MosqueLookupError(
+      'Retry maximum delay must not be less than retry base delay',
+    );
+  }
+  if (options.signal?.aborted) throw abortError();
 
-  const query = buildQuery(coordinates, radiusMeters);
   const endpoints = options.endpoints ?? OVERPASS_ENDPOINTS;
   if (
     !endpoints.length ||
@@ -279,15 +467,34 @@ export async function getNearbyMosques(
   ) {
     throw new MosqueLookupError('No valid Overpass endpoint is configured');
   }
+  const maxAttempts = options.maxAttempts ?? endpoints.length;
+  validateAttemptCount(maxAttempts, endpoints.length);
 
+  const cacheGeneration = mosqueCacheGeneration;
+  const key = cacheKey(coordinates, radiusMeters);
+  if (!options.forceRefresh) {
+    const cached = readCachedMosques(key);
+    if (cached) return cached;
+  }
+
+  const query = buildQuery(
+    coordinates,
+    radiusMeters,
+    overpassTimeoutSeconds(timeoutMs),
+  );
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const random = options.random ?? Math.random;
   let lastError: unknown;
-  for (const [index, endpoint] of endpoints.entries()) {
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const endpoint = endpoints[attempt % endpoints.length];
     try {
       const { response, body } = await request(
         endpoint,
         query,
-        options.fetchImpl ?? fetch,
+        fetchImpl,
         timeoutMs,
+        options.signal,
       );
       if (!response.ok) {
         throw new MosqueLookupError(
@@ -297,7 +504,7 @@ export async function getNearbyMosques(
       }
 
       const seen = new Set<string>();
-      return responseElements(body)
+      const results = responseElements(body)
         .map(element => normalizeElement(element, coordinates))
         .filter((mosque): mosque is Mosque => mosque !== null)
         .filter(mosque => {
@@ -311,13 +518,16 @@ export async function getNearbyMosques(
             left.id.localeCompare(right.id),
         )
         .slice(0, MAX_NEARBY_MOSQUES);
+      cacheMosques(key, results, cacheTtlMs, cacheGeneration);
+      return results;
     } catch (error) {
       lastError = error;
-      const statusCode =
-        error instanceof MosqueLookupError ? error.statusCode : undefined;
-      const canRetry =
-        statusCode === undefined || statusCode === 429 || statusCode >= 500;
-      if (!canRetry || index === endpoints.length - 1) throw error;
+      if (options.signal?.aborted || !isRetryableError(error)) throw error;
+      if (attempt === maxAttempts - 1) throw error;
+      await waitForRetry(
+        retryDelayMs(error, attempt, retryBaseDelayMs, retryMaxDelayMs, random),
+        options.signal,
+      );
     }
   }
 

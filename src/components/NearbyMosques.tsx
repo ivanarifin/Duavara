@@ -25,6 +25,8 @@ import {
   OSM_ATTRIBUTION,
 } from '@/services/mosques';
 
+const MANUAL_SEARCH_COOLDOWN_MS = 30_000;
+
 const COLORS = {
   ink: '#08201E',
   inkSoft: '#10332F',
@@ -53,11 +55,16 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
   const [favorites, setFavorites] = useState<MosqueFavorite[]>([]);
   const [state, setState] = useState<LoadState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [manualSearchNotice, setManualSearchNotice] = useState<string | null>(
+    null,
+  );
   const [storageAction, setStorageAction] = useState<StorageAction | null>(
     null,
   );
   const storageRetry = useRef<(() => Promise<void>) | null>(null);
   const requestId = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
+  const manualSearchCooldownUntil = useRef(0);
 
   const clearStorageError = useCallback(() => {
     storageRetry.current = null;
@@ -110,44 +117,80 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
   }, [loadFavorites]);
 
   useEffect(() => {
+    activeRequest.current?.abort();
+    activeRequest.current = null;
     requestId.current += 1;
-    if (!coordinates) {
-      setMosques([]);
-      setState('idle');
-      setError(null);
-    }
-  }, [coordinates]);
-
-  const loadMosques = useCallback(async () => {
-    if (!coordinates) {
-      setMosques([]);
-      setState('idle');
-      setError(null);
-      return;
-    }
-
-    const currentRequestId = ++requestId.current;
-    setState('loading');
+    setMosques([]);
+    setState('idle');
     setError(null);
-
-    try {
-      const results = await getNearbyMosques(coordinates, {
-        radiusMeters: 5_000,
-      });
-      if (currentRequestId !== requestId.current) return;
-      setMosques(results.slice(0, MAX_NEARBY_MOSQUES));
-      setState('success');
-    } catch (errorValue) {
-      if (currentRequestId !== requestId.current) return;
-      setMosques([]);
-      setState('error');
-      setError(mosqueSearchMessage(errorValue));
-    }
+    return () => {
+      activeRequest.current?.abort();
+      activeRequest.current = null;
+      requestId.current += 1;
+    };
   }, [coordinates]);
+
+  const loadMosques = useCallback(
+    async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}) => {
+      if (!coordinates) {
+        setMosques([]);
+        setState('idle');
+        setError(null);
+        return;
+      }
+
+      activeRequest.current?.abort();
+      const controller =
+        typeof AbortController === 'undefined' ? null : new AbortController();
+      activeRequest.current = controller;
+      const currentRequestId = ++requestId.current;
+      setState('loading');
+      setError(null);
+      setManualSearchNotice(null);
+
+      try {
+        const results = await getNearbyMosques(coordinates, {
+          radiusMeters: 5_000,
+          cacheTtlMs: 5 * 60 * 1_000,
+          forceRefresh,
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (currentRequestId !== requestId.current) return;
+        setMosques(results.slice(0, MAX_NEARBY_MOSQUES));
+        setState('success');
+      } catch (errorValue) {
+        if (
+          currentRequestId !== requestId.current ||
+          (errorValue instanceof MosqueLookupError &&
+            errorValue.code === 'ABORTED')
+        ) {
+          return;
+        }
+        setState('error');
+        setError(mosqueSearchMessage(errorValue));
+      } finally {
+        if (activeRequest.current === controller) activeRequest.current = null;
+      }
+    },
+    [coordinates],
+  );
 
   useEffect(() => {
     if (coordinates) loadMosques().catch(() => undefined);
   }, [coordinates, loadMosques]);
+
+  const handleManualSearch = useCallback(() => {
+    const remainingMs = manualSearchCooldownUntil.current - Date.now();
+    if (remainingMs > 0) {
+      const remainingSeconds = Math.ceil(remainingMs / 1_000);
+      setManualSearchNotice(
+        `Please wait ${remainingSeconds} seconds before searching again.`,
+      );
+      return;
+    }
+    manualSearchCooldownUntil.current = Date.now() + MANUAL_SEARCH_COOLDOWN_MS;
+    loadMosques({ forceRefresh: true }).catch(() => undefined);
+  }, [loadMosques]);
 
   const handleToggleFavorite = useCallback(
     async (mosque: Mosque) => {
@@ -220,7 +263,7 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
           !hasCoordinates && styles.findButtonDisabled,
           pressed && hasCoordinates && styles.findButtonPressed,
         ]}
-        onPress={loadMosques}
+        onPress={handleManualSearch}
         disabled={!hasCoordinates || isLoading}
         accessibilityRole="button"
         accessibilityLabel="Find mosques near me"
@@ -253,10 +296,25 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
 
       {isLoading ? (
         <View style={styles.messageCard} accessibilityLiveRegion="polite">
-          <Text style={styles.messageTitle}>Looking nearby…</Text>
-          <Text style={styles.messageText}>
-            Searching OpenStreetMap for mosques within 5 km.
+          <Text style={styles.messageTitle}>
+            {mosques.length ? 'Refreshing nearby results…' : 'Looking nearby…'}
           </Text>
+          <Text style={styles.messageText}>
+            {mosques.length
+              ? 'Keeping your previous results visible while OpenStreetMap refreshes.'
+              : 'Searching OpenStreetMap for mosques within 5 km.'}
+          </Text>
+        </View>
+      ) : null}
+
+      {manualSearchNotice ? (
+        <View
+          style={styles.messageCard}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+        >
+          <Text style={styles.messageTitle}>Search cooling down</Text>
+          <Text style={styles.messageText}>{manualSearchNotice}</Text>
         </View>
       ) : null}
 
@@ -284,15 +342,24 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
       ) : null}
 
       {state === 'error' ? (
-        <View style={styles.errorCard} accessibilityLiveRegion="polite">
+        <View
+          style={styles.errorCard}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+        >
           <Text style={styles.errorTitle}>Search unavailable</Text>
-          <Text style={styles.errorText}>{error}</Text>
+          <Text style={styles.errorText}>
+            {error}
+            {mosques.length
+              ? ' Showing your previous results while the directory recovers.'
+              : ''}
+          </Text>
           <Pressable
             style={({ pressed }) => [
               styles.retryButton,
               pressed && styles.retryButtonPressed,
             ]}
-            onPress={loadMosques}
+            onPress={handleManualSearch}
             accessibilityRole="button"
             accessibilityLabel="Try finding mosques again"
             accessibilityHint="Repeats the nearby mosque search."

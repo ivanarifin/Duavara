@@ -174,6 +174,7 @@ export function SplashScreen({ onFinish }: { onFinish: () => void }) {
               transform: [{ scale: crescentScale }],
             },
           ]}
+          testID="splash-crescent"
         >
           <View style={styles.crescentCutout} />
         </Animated.View>
@@ -186,6 +187,7 @@ export function SplashScreen({ onFinish }: { onFinish: () => void }) {
               transform: [{ scale: artifactScale }],
             },
           ]}
+          testID="splash-artifact-frame"
         >
           <Image source={appIconAsset} style={styles.artifact} />
         </Animated.View>
@@ -260,7 +262,7 @@ const styles = StyleSheet.create({
     borderRadius: 51,
     backgroundColor: COLORS.gold,
     overflow: 'hidden',
-    marginBottom: -12,
+    marginBottom: 12,
   },
   crescentCutout: {
     position: 'absolute',
