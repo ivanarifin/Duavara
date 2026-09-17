@@ -1,0 +1,329 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Positive iOS CFBundleVersion build number (defaults to a timestamp)
+        required: false
+        type: string
+      export_method:
+        description: Xcode export method used when distribution secrets are configured
+        required: false
+        default: ad-hoc
+        type: choice
+        options:
+          - ad-hoc
+          - development
+          - app-store-connect
+          - enterprise
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Archive and export IPA
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Resolve build identity
+        env:
+          REQUESTED_BUILD_NUMBER: ${{ inputs.build_number }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "$RELEASE_COMMIT" ]]; then
+            echo "Checked-out commit does not match the triggering commit." >&2
+            exit 1
+          fi
+          build_number="${REQUESTED_BUILD_NUMBER:-$(date +%s)}"
+          if [[ ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
+            echo "iOS build number must be a positive integer." >&2
+            exit 1
+          fi
+          package_version="$(node -p "require('./package.json').version")"
+          {
+            echo "PACKAGE_VERSION=$package_version"
+            echo "IOS_BUILD_NUMBER=$build_number"
+            echo "RELEASE_COMMIT=$RELEASE_COMMIT"
+            echo "ARCHIVE_PATH=$RUNNER_TEMP/Duavara.xcarchive"
+            echo "EXPORT_PATH=$RUNNER_TEMP/export"
+          } >> "$GITHUB_ENV"
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Ruby dependencies
+        run: bundle install
+
+      - name: Validate build candidate
+        run: |
+          npm run audit:dependencies
+          npm run version:check -- --ios-build-number "$IOS_BUILD_NUMBER"
+          npm run typecheck
+          npm run lint
+          npm test -- --runInBand
+
+      - name: Install CocoaPods dependencies
+        run: bundle exec pod install --project-directory=ios --deployment
+
+      - name: Configure iOS distribution signing
+        id: signing
+        env:
+          DUAVARA_IOS_DIST_CERT_BASE64: ${{ secrets.DUAVARA_IOS_DIST_CERT_BASE64 }}
+          DUAVARA_IOS_DIST_CERT_PASSWORD: ${{ secrets.DUAVARA_IOS_DIST_CERT_PASSWORD }}
+          DUAVARA_IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.DUAVARA_IOS_PROVISIONING_PROFILE_BASE64 }}
+          DUAVARA_IOS_TEAM_ID: ${{ secrets.DUAVARA_IOS_TEAM_ID }}
+          EXPORT_METHOD: ${{ inputs.export_method || 'ad-hoc' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DUAVARA_IOS_DIST_CERT_BASE64" || \
+                -z "$DUAVARA_IOS_DIST_CERT_PASSWORD" || \
+                -z "$DUAVARA_IOS_PROVISIONING_PROFILE_BASE64" || \
+                -z "$DUAVARA_IOS_TEAM_ID" ]]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "iOS distribution secrets are not configured; building an unsigned IPA." >&2
+            exit 0
+          fi
+
+          keychain_path="$RUNNER_TEMP/duavara-ios-build.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          certificate_path="$RUNNER_TEMP/duavara-ios-distribution.p12"
+          profile_path="$RUNNER_TEMP/duavara-ios.mobileprovision"
+          profile_plist="$RUNNER_TEMP/duavara-ios-profile.plist"
+
+          printf '%s' "$DUAVARA_IOS_DIST_CERT_BASE64" | base64 --decode > "$certificate_path"
+          printf '%s' "$DUAVARA_IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$profile_path"
+          chmod 600 "$certificate_path" "$profile_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$DUAVARA_IOS_DIST_CERT_PASSWORD" \
+            -f pkcs12 \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain_path" >/dev/null
+          security list-keychains -d user -s "$keychain_path" login.keychain-db
+
+          security cms -D -i "$profile_path" > "$profile_plist"
+          profile_name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$profile_plist")"
+          profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$profile_plist")"
+          profile_application_id="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")"
+          if [[ "$profile_application_id" != *".id.vandev.duavara" ]]; then
+            echo "Provisioning profile does not match the id.vandev.duavara bundle identifier." >&2
+            exit 1
+          fi
+
+          for profile_directory in \
+            "$HOME/Library/MobileDevice/Provisioning Profiles" \
+            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$profile_directory"
+            cp "$profile_path" "$profile_directory/$profile_uuid.mobileprovision"
+          done
+
+          signing_identity="$(
+            security find-identity -v -p codesigning "$keychain_path" |
+              awk -F'"' 'NF > 1 && identity == "" { identity = $2 } END { print identity }'
+          )"
+          if [[ -z "$signing_identity" ]]; then
+            echo "No code signing identity was found in the temporary keychain." >&2
+            exit 1
+          fi
+
+          {
+            echo "signed=true"
+            echo "keychain_path=$keychain_path"
+            echo "profile_name=$profile_name"
+            echo "signing_identity=$signing_identity"
+          } >> "$GITHUB_OUTPUT"
+
+          export EXPORT_METHOD DUAVARA_IOS_TEAM_ID profile_name
+          export EXPORT_OPTIONS_PATH="$RUNNER_TEMP/ExportOptions.plist"
+          node <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          const escape = value =>
+            String(value)
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+          const options = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+            '<plist version="1.0">',
+            '<dict>',
+            `  <key>method</key><string>${escape(process.env.EXPORT_METHOD)}</string>`,
+            `  <key>teamID</key><string>${escape(process.env.DUAVARA_IOS_TEAM_ID)}</string>`,
+            '  <key>signingStyle</key><string>manual</string>',
+            '  <key>stripSwiftSymbols</key><true/>',
+            '  <key>uploadSymbols</key><true/>',
+            '  <key>compileBitcode</key><false/>',
+            '  <key>destination</key><string>export</string>',
+            '  <key>provisioningProfiles</key>',
+            '  <dict>',
+            `    <key>id.vandev.duavara</key><string>${escape(process.env.profile_name)}</string>`,
+            '  </dict>',
+            '</dict>',
+            '</plist>',
+            '',
+          ].join('\n');
+          writeFileSync(process.env.EXPORT_OPTIONS_PATH, options);
+          NODE
+          echo "EXPORT_OPTIONS_PATH=$RUNNER_TEMP/ExportOptions.plist" >> "$GITHUB_ENV"
+
+      - name: Archive signed iOS release
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          DUAVARA_IOS_TEAM_ID: ${{ secrets.DUAVARA_IOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -workspace ios/Duavara.xcworkspace \
+            -scheme Duavara \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            CURRENT_PROJECT_VERSION="$IOS_BUILD_NUMBER" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$DUAVARA_IOS_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.profile_name }}" \
+            CODE_SIGN_IDENTITY="${{ steps.signing.outputs.signing_identity }}" \
+            OTHER_CODE_SIGN_FLAGS="--keychain ${{ steps.signing.outputs.keychain_path }}"
+
+      - name: Export signed IPA
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist "$EXPORT_OPTIONS_PATH" \
+            -exportPath "$EXPORT_PATH"
+
+      - name: Archive and package unsigned IPA
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -workspace ios/Duavara.xcworkspace \
+            -scheme Duavara \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            CURRENT_PROJECT_VERSION="$IOS_BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS=""
+          app_path="$ARCHIVE_PATH/Products/Applications/Duavara.app"
+          test -d "$app_path"
+          rm -rf "$EXPORT_PATH"
+          mkdir -p "$EXPORT_PATH/Payload"
+          cp -R "$app_path" "$EXPORT_PATH/Payload/Duavara.app"
+          (
+            cd "$EXPORT_PATH"
+            zip -qry Duavara.ipa Payload
+            rm -rf Payload
+          )
+
+      - name: Collect IPA, checksum, and metadata
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          EXPORT_METHOD: ${{ inputs.export_method || 'ad-hoc' }}
+        run: |
+          set -euo pipefail
+          source_ipa="$(find "$EXPORT_PATH" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+          test -n "$source_ipa"
+          artifact_name="duavara-${PACKAGE_VERSION}.ipa"
+          mkdir -p dist
+          rm -f "dist/$artifact_name" "dist/$artifact_name.sha256" "dist/$artifact_name.json"
+          cp "$source_ipa" "dist/$artifact_name"
+          (
+            cd dist
+            shasum -a 256 "$artifact_name" > "$artifact_name.sha256"
+            shasum -a 256 --check "$artifact_name.sha256"
+          )
+          if [[ "$SIGNED" == "true" ]]; then
+            unpack_dir="$RUNNER_TEMP/ipa-verify"
+            rm -rf "$unpack_dir"
+            mkdir -p "$unpack_dir"
+            unzip -q "dist/$artifact_name" -d "$unpack_dir"
+            codesign --verify --verbose=2 "$unpack_dir/Payload/Duavara.app"
+          fi
+          export artifact_name
+          node <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          const signed = process.env.SIGNED === 'true';
+          const metadata = {
+            version: process.env.PACKAGE_VERSION,
+            buildNumber: Number(process.env.IOS_BUILD_NUMBER),
+            gitSha: process.env.RELEASE_COMMIT,
+            signed,
+            exportMethod: signed ? process.env.EXPORT_METHOD : null,
+          };
+          if (
+            !metadata.version ||
+            !Number.isSafeInteger(metadata.buildNumber) ||
+            metadata.buildNumber < 1 ||
+            !/^[0-9a-f]{40}$/.test(metadata.gitSha)
+          ) {
+            throw new Error('IPA metadata does not describe the built commit and build number.');
+          }
+          writeFileSync(
+            `dist/${process.env.artifact_name}.json`,
+            `${JSON.stringify(metadata, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: duavara-ios-${{ env.IOS_BUILD_NUMBER }}-ipa
+          path: |
+            dist/*.ipa
+            dist/*.ipa.sha256
+            dist/*.ipa.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          set -uo pipefail
+          keychain_path="${{ steps.signing.outputs.keychain_path }}"
+          if [[ -n "$keychain_path" && -f "$keychain_path" ]]; then
+            security list-keychains -d user -s login.keychain-db || true
+            security delete-keychain "$keychain_path" || true
+          fi
+          rm -f \
+            "$RUNNER_TEMP/duavara-ios-distribution.p12" \
+            "$RUNNER_TEMP/duavara-ios.mobileprovision" \
+            "$RUNNER_TEMP/duavara-ios-profile.plist"
