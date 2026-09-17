@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { StyleSheet } from 'react-native';
+import { Animated, StyleSheet } from 'react-native';
 import { SplashScreen } from '@/components/SplashScreen';
 
 function flattenedStyle(
@@ -10,11 +10,18 @@ function flattenedStyle(
 }
 
 describe('SplashScreen', () => {
-  test('keeps the crescent separated from the Kaaba emblem', async () => {
+  test('keeps the crescent separated from the Kaaba emblem', () => {
+    const animation = () => ({ start: jest.fn(), stop: jest.fn() });
+    jest.spyOn(Animated, 'delay').mockImplementation(animation as never);
+    jest.spyOn(Animated, 'timing').mockImplementation(animation as never);
+    jest.spyOn(Animated, 'spring').mockImplementation(animation as never);
+    jest.spyOn(Animated, 'sequence').mockImplementation(animation as never);
+    jest.spyOn(Animated, 'parallel').mockImplementation(animation as never);
+    jest.spyOn(Animated, 'loop').mockImplementation(animation as never);
     let renderer!: ReactTestRenderer.ReactTestRenderer;
 
     try {
-      await ReactTestRenderer.act(async () => {
+      ReactTestRenderer.act(() => {
         renderer = ReactTestRenderer.create(
           <SplashScreen onFinish={jest.fn()} />,
         );
@@ -32,9 +39,10 @@ describe('SplashScreen', () => {
       expect(artifactStyle.height).toBe(116);
       expect(Number(crescentStyle.marginBottom)).toBeGreaterThan(0);
     } finally {
-      await ReactTestRenderer.act(async () => {
+      ReactTestRenderer.act(() => {
         renderer?.unmount();
       });
+      jest.restoreAllMocks();
     }
   });
 });
