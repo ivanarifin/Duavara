@@ -47,8 +47,8 @@ jobs:
           set -euo pipefail
           if [[ "$EVENT_NAME" == "push" ]]; then
             release_tag="$PUSH_TAG"
-            max_published_version_code=0
-            while IFS= read -r asset_id; do
+            max_published_version_code=1
+            while IFS=$'\t' read -r published_tag asset_id; do
               existing_version_code="$(
                 gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
                   -H 'Accept: application/octet-stream' |
@@ -59,7 +59,7 @@ jobs:
               fi
             done < <(
               gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-                --jq '.[].assets[]? | select(.name | endswith(".apk.json")) | .id'
+                --jq '.[] | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | .tag_name as $tag | .assets[]? | select(.name | endswith(".apk.json")) | "\($tag)\t\(.id)"'
             )
             release_version_code=$((max_published_version_code + 1))
           else
@@ -108,7 +108,7 @@ jobs:
             echo "A GitHub Release already exists for $RELEASE_TAG; releases are not overwritten." >&2
             exit 1
           fi
-          while IFS= read -r asset_id; do
+          while IFS=$'\t' read -r published_tag asset_id; do
             existing_version_code="$(
               gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
                 -H 'Accept: application/octet-stream' |
@@ -120,7 +120,7 @@ jobs:
             fi
           done < <(
             gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[].assets[]? | select(.name | endswith(".apk.json")) | .id'
+              --jq '.[] | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | .tag_name as $tag | .assets[]? | select(.name | endswith(".apk.json")) | "\($tag)\t\(.id)"'
           )
           {
             echo "PACKAGE_VERSION=$package_version"

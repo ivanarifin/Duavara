@@ -59,6 +59,7 @@ react {
  */
 def packageJson = new groovy.json.JsonSlurper().parse(file("../../package.json"))
 def versionCodeValue = System.getenv("DUAVARA_VERSION_CODE") ?: "1"
+def applicationIdValue = System.getenv("DUAVARA_APPLICATION_ID") ?: "id.vandev.duavara"
 def localUploadKeystore = file("duavara-upload.jks")
 def keychainSecret = { account ->
     if (!System.getProperty("os.name").toLowerCase().contains("mac")) return null
@@ -112,7 +113,7 @@ android {
 
     namespace "id.vandev.duavara"
     defaultConfig {
-        applicationId "id.vandev.duavara"
+        applicationId applicationIdValue
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode versionCodeValue.toInteger()
