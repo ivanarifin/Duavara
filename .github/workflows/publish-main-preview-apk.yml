@@ -41,26 +41,8 @@ jobs:
             echo "Checked-out commit does not match the pushed main commit." >&2
             exit 1
           fi
-          max_published_version_code=0
-          while IFS= read -r asset_id; do
-            existing_version_code="$(
-              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
-                -H 'Accept: application/octet-stream' |
-                node -e 'const { readFileSync } = require("node:fs"); const value = JSON.parse(readFileSync(0, "utf8")).versionCode; if (!Number.isSafeInteger(value) || value < 1) process.exit(1); console.log(value);'
-            )"
-            if (( existing_version_code > max_published_version_code )); then
-              max_published_version_code=$existing_version_code
-            fi
-          done < <(
-            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[].assets[]? | select(.name | endswith(".apk.json")) | .id'
-          )
           timestamp_version_code="$(date +%s)"
-          if (( timestamp_version_code > max_published_version_code )); then
-            preview_version_code=$timestamp_version_code
-          else
-            preview_version_code=$((max_published_version_code + 1))
-          fi
+          preview_version_code=$timestamp_version_code
           if (( preview_version_code > 2100000000 )); then
             echo "Generated Android version code exceeds the Android limit." >&2
             exit 1
@@ -139,6 +121,7 @@ jobs:
             echo "DUAVARA_UPLOAD_STORE_PASSWORD=$DUAVARA_UPLOAD_STORE_PASSWORD"
             echo "DUAVARA_UPLOAD_KEY_ALIAS=$DUAVARA_UPLOAD_KEY_ALIAS"
             echo "DUAVARA_UPLOAD_KEY_PASSWORD=$DUAVARA_UPLOAD_KEY_PASSWORD"
+            echo "DUAVARA_APPLICATION_ID=id.vandev.duavara.preview"
             echo "DUAVARA_VERSION_CODE=$PREVIEW_VERSION_CODE"
           } >> "$GITHUB_ENV"
 
