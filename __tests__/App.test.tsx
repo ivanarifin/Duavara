@@ -324,8 +324,23 @@ test('opens About Duavara with installed metadata and verified links', async () 
       ),
     ).toBeDefined();
 
+    const support = findByAccessibilityLabel(
+      renderer,
+      'Support Duavara on Buy Me a Coffee',
+    );
+    expect(support.props.accessibilityRole).toBe('button');
+    expect(support.props.accessibilityHint).toBe(
+      'Opens Buy Me a Coffee in your browser.',
+    );
+    const heart = renderer.root.findAll(node => node.props.children === '♥')[0];
+    expect(heart.parent?.props.accessibilityElementsHidden).toBe(true);
+    expect(heart.parent?.props.importantForAccessibility).toBe(
+      'no-hide-descendants',
+    );
+
     await press(renderer, 'Open Duavara source repository');
     await press(renderer, 'View Duavara privacy policy');
+    await press(renderer, 'Support Duavara on Buy Me a Coffee');
     await press(renderer, 'Open AlAdhan data source');
     await press(renderer, 'Open latest Duavara release');
 
@@ -335,6 +350,7 @@ test('opens About Duavara with installed metadata and verified links', async () 
     expect(openUrl).toHaveBeenCalledWith(
       'https://github.com/ivanarifin/Duavara/blob/main/PRIVACY.md',
     );
+    expect(openUrl).toHaveBeenCalledWith('https://buymeacoffee.com/ivanarifin');
     expect(openUrl).toHaveBeenCalledWith(
       'https://aladhan.com/prayer-times-api',
     );
