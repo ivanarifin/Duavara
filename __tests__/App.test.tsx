@@ -320,7 +320,7 @@ test('opens About Duavara with installed metadata and verified links', async () 
     expect(
       findByAccessibilityLabel(
         renderer,
-        'Privacy by design: no account, no analytics, data stays on this device',
+        'Privacy by design: app data is stored locally; location is shared with named services only when location-based features are used',
       ),
     ).toBeDefined();
 

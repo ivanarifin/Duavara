@@ -7,6 +7,7 @@ import type { Mosque } from '@/services/mosques';
 type MosqueLookupOptions = {
   radiusMeters?: number;
   signal?: AbortSignal;
+  forceRefresh?: boolean;
 };
 
 type MosqueMocks = {
@@ -191,6 +192,67 @@ describe('NearbyMosques lookup reliability', () => {
     });
 
     expect(renderedTree(renderer)).toContain('Recovered Mosque');
+    expect(
+      (mosqueMocks.getNearbyMosques.mock.calls[1][1] as MosqueLookupOptions)
+        .forceRefresh,
+    ).toBe(true);
+  });
+
+  test('rate-limits manual searches for 30 seconds after a successful automatic lookup', async () => {
+    jest.useFakeTimers();
+    mosqueMocks.getNearbyMosques
+      .mockResolvedValueOnce([mosque('automatic', 'Automatic Mosque')])
+      .mockResolvedValueOnce([mosque('manual', 'Manual Mosque')])
+      .mockResolvedValueOnce([mosque('later', 'Later Mosque')]);
+
+    try {
+      const renderer = await renderNearbyMosques();
+      const findMosques = findByAccessibilityLabel(
+        renderer,
+        'Find mosques near me',
+      );
+
+      expect(mosqueMocks.getNearbyMosques).toHaveBeenCalledTimes(1);
+
+      await ReactTestRenderer.act(async () => {
+        findMosques.props.onPress();
+        await flushMicrotasks();
+      });
+
+      expect(mosqueMocks.getNearbyMosques).toHaveBeenCalledTimes(2);
+      expect(
+        (mosqueMocks.getNearbyMosques.mock.calls[1][1] as MosqueLookupOptions)
+          .forceRefresh,
+      ).toBe(true);
+
+      await ReactTestRenderer.act(async () => {
+        findMosques.props.onPress();
+        await flushMicrotasks();
+      });
+
+      expect(mosqueMocks.getNearbyMosques).toHaveBeenCalledTimes(2);
+      expect(renderedTree(renderer)).toContain(
+        'Please wait 30 seconds before searching again.',
+      );
+      expect(
+        renderer.root.findAll(node => node.props.accessibilityRole === 'alert'),
+      ).not.toHaveLength(0);
+
+      await ReactTestRenderer.act(async () => {
+        jest.advanceTimersByTime(30_000);
+        await flushMicrotasks();
+        findMosques.props.onPress();
+        await flushMicrotasks();
+      });
+
+      expect(mosqueMocks.getNearbyMosques).toHaveBeenCalledTimes(3);
+      expect(
+        (mosqueMocks.getNearbyMosques.mock.calls[2][1] as MosqueLookupOptions)
+          .forceRefresh,
+      ).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('keeps prior results visible while manually refreshing', async () => {

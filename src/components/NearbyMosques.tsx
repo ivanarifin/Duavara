@@ -25,6 +25,8 @@ import {
   OSM_ATTRIBUTION,
 } from '@/services/mosques';
 
+const MANUAL_SEARCH_COOLDOWN_MS = 30_000;
+
 const COLORS = {
   ink: '#08201E',
   inkSoft: '#10332F',
@@ -53,12 +55,16 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
   const [favorites, setFavorites] = useState<MosqueFavorite[]>([]);
   const [state, setState] = useState<LoadState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [manualSearchNotice, setManualSearchNotice] = useState<string | null>(
+    null,
+  );
   const [storageAction, setStorageAction] = useState<StorageAction | null>(
     null,
   );
   const storageRetry = useRef<(() => Promise<void>) | null>(null);
   const requestId = useRef(0);
   const activeRequest = useRef<AbortController | null>(null);
+  const manualSearchCooldownUntil = useRef(0);
 
   const clearStorageError = useCallback(() => {
     storageRetry.current = null;
@@ -140,6 +146,7 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
       const currentRequestId = ++requestId.current;
       setState('loading');
       setError(null);
+      setManualSearchNotice(null);
 
       try {
         const results = await getNearbyMosques(coordinates, {
@@ -171,6 +178,19 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
   useEffect(() => {
     if (coordinates) loadMosques().catch(() => undefined);
   }, [coordinates, loadMosques]);
+
+  const handleManualSearch = useCallback(() => {
+    const remainingMs = manualSearchCooldownUntil.current - Date.now();
+    if (remainingMs > 0) {
+      const remainingSeconds = Math.ceil(remainingMs / 1_000);
+      setManualSearchNotice(
+        `Please wait ${remainingSeconds} seconds before searching again.`,
+      );
+      return;
+    }
+    manualSearchCooldownUntil.current = Date.now() + MANUAL_SEARCH_COOLDOWN_MS;
+    loadMosques({ forceRefresh: true }).catch(() => undefined);
+  }, [loadMosques]);
 
   const handleToggleFavorite = useCallback(
     async (mosque: Mosque) => {
@@ -243,9 +263,7 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
           !hasCoordinates && styles.findButtonDisabled,
           pressed && hasCoordinates && styles.findButtonPressed,
         ]}
-        onPress={() => {
-          loadMosques({ forceRefresh: true }).catch(() => undefined);
-        }}
+        onPress={handleManualSearch}
         disabled={!hasCoordinates || isLoading}
         accessibilityRole="button"
         accessibilityLabel="Find mosques near me"
@@ -286,6 +304,17 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
               ? 'Keeping your previous results visible while OpenStreetMap refreshes.'
               : 'Searching OpenStreetMap for mosques within 5 km.'}
           </Text>
+        </View>
+      ) : null}
+
+      {manualSearchNotice ? (
+        <View
+          style={styles.messageCard}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+        >
+          <Text style={styles.messageTitle}>Search cooling down</Text>
+          <Text style={styles.messageText}>{manualSearchNotice}</Text>
         </View>
       ) : null}
 
@@ -330,9 +359,7 @@ export function NearbyMosques({ coordinates }: NearbyMosquesProps) {
               styles.retryButton,
               pressed && styles.retryButtonPressed,
             ]}
-            onPress={() => {
-              loadMosques({ forceRefresh: true }).catch(() => undefined);
-            }}
+            onPress={handleManualSearch}
             accessibilityRole="button"
             accessibilityLabel="Try finding mosques again"
             accessibilityHint="Repeats the nearby mosque search."

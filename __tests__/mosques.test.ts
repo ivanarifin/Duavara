@@ -318,6 +318,40 @@ describe('nearby mosque lookup', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  test('falls back after a malformed successful response', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce(response({ error: 'invalid Overpass payload' }))
+      .mockResolvedValueOnce(
+        response({
+          elements: [
+            {
+              type: 'node',
+              id: 42,
+              lat: 0.001,
+              lon: 0,
+              tags: { name: 'Fallback Mosque' },
+            },
+          ],
+        }),
+      );
+
+    await expect(
+      getNearbyMosques(
+        { latitude: 0, longitude: 0 },
+        {
+          fetchImpl,
+          endpoints: [OVERPASS_ENDPOINT, 'https://fallback.example/api'],
+          retryBaseDelayMs: 0,
+          retryMaxDelayMs: 0,
+        },
+      ),
+    ).resolves.toMatchObject([{ id: 'node/42', name: 'Fallback Mosque' }]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0][0]).toBe(OVERPASS_ENDPOINT);
+    expect(fetchImpl.mock.calls[1][0]).toBe('https://fallback.example/api');
+  });
+
   test('does not fetch or fall back after caller cancellation', async () => {
     const controller = new AbortController();
     controller.abort();

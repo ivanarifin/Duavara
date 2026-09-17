@@ -3983,7 +3983,7 @@ function AboutView({
 
       <View
         style={styles.aboutPrivacyCard}
-        accessibilityLabel="Privacy by design: no account, no analytics, data stays on this device"
+        accessibilityLabel="Privacy by design: app data is stored locally; location is shared with named services only when location-based features are used"
       >
         <Text style={styles.aboutPrivacyKicker}>PRIVATE BY DESIGN</Text>
         <Text style={styles.aboutPrivacyTitle}>
@@ -3991,13 +3991,14 @@ function AboutView({
         </Text>
         <Text style={styles.aboutPrivacyDescription}>
           Duavara does not create accounts, use analytics, or operate an app
-          backend.
+          backend. Location is shared with AlAdhan, OpenStreetMap, and platform
+          geocoding only when you use location-based features.
         </Text>
         <View style={styles.aboutPrivacyFacts}>
           {[
             'No account required',
             'No analytics tracking',
-            'Data stays on this device',
+            'App data stored locally',
           ].map(fact => (
             <View key={fact} style={styles.aboutPrivacyFact}>
               <Text style={styles.aboutPrivacyCheck}>✓</Text>

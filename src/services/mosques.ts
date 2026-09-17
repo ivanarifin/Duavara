@@ -273,9 +273,8 @@ function abortError(): MosqueLookupError {
 
 function isRetryableError(error: unknown): boolean {
   if (!(error instanceof MosqueLookupError)) return true;
-  if (error.code === 'ABORTED' || error.code === 'INVALID_RESPONSE') {
-    return false;
-  }
+  if (error.code === 'ABORTED') return false;
+  if (error.code === 'INVALID_RESPONSE') return true;
   return (
     error.code === 'TIMEOUT' ||
     error.statusCode === undefined ||
