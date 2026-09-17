@@ -1,6 +1,9 @@
 name: Publish Android APK
 
 on:
+  push:
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
@@ -30,8 +33,43 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           fetch-depth: 0
+
+      - name: Resolve release inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          MANUAL_TAG: ${{ inputs.tag }}
+          MANUAL_VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            release_tag="$PUSH_TAG"
+            max_published_version_code=0
+            while IFS= read -r asset_id; do
+              existing_version_code="$(
+                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                  -H 'Accept: application/octet-stream' |
+                  node -e 'const { readFileSync } = require("node:fs"); const value = JSON.parse(readFileSync(0, "utf8")).versionCode; if (!Number.isSafeInteger(value) || value < 1) process.exit(1); console.log(value);'
+              )"
+              if (( existing_version_code > max_published_version_code )); then
+                max_published_version_code=$existing_version_code
+              fi
+            done < <(
+              gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+                --jq '.[].assets[]? | select(.name | endswith(".apk.json")) | .id'
+            )
+            release_version_code=$((max_published_version_code + 1))
+          else
+            release_tag="$MANUAL_TAG"
+            release_version_code="$MANUAL_VERSION_CODE"
+          fi
+          {
+            echo "RELEASE_TAG=$release_tag"
+            echo "RELEASE_VERSION_CODE=$release_version_code"
+          } >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -42,8 +80,6 @@ jobs:
       - name: Validate release tag and version
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_VERSION_CODE: ${{ inputs.version_code }}
         run: |
           set -euo pipefail
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -116,11 +152,9 @@ jobs:
         run: npm ci
 
       - name: Validate release candidate
-        env:
-          DUAVARA_VERSION_CODE: ${{ inputs.version_code }}
         run: |
           npm run audit:dependencies
-          npm run version:check -- --android-build-code "$DUAVARA_VERSION_CODE"
+          npm run version:check -- --android-build-code "$RELEASE_VERSION_CODE"
           npm run typecheck
           npm run lint
           npm run test:coverage -- --runInBand
@@ -151,7 +185,7 @@ jobs:
             echo "DUAVARA_UPLOAD_STORE_PASSWORD=$DUAVARA_UPLOAD_STORE_PASSWORD"
             echo "DUAVARA_UPLOAD_KEY_ALIAS=$DUAVARA_UPLOAD_KEY_ALIAS"
             echo "DUAVARA_UPLOAD_KEY_PASSWORD=$DUAVARA_UPLOAD_KEY_PASSWORD"
-            echo "DUAVARA_VERSION_CODE=${{ inputs.version_code }}"
+            echo "DUAVARA_VERSION_CODE=$RELEASE_VERSION_CODE"
           } >> "$GITHUB_ENV"
 
       - name: Build signed Android APK
@@ -182,7 +216,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: duavara-${{ inputs.tag }}-apk
+          name: duavara-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}-apk
           path: |
             dist/*.apk
             dist/*.apk.sha256
@@ -193,7 +227,6 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           remote_tag_commit="$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk '{print $1}')"
