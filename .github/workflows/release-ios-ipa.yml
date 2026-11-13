@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           # CFBundleVersion only has to be a positive integer, so the tag's commit
           # depth gives a deterministic value that grows along the release line.
-          build_number="$(git rev-list --count "refs/tags/$RELEASE_TAG^{}}")"
+          build_number="$(git rev-list --count "refs/tags/$RELEASE_TAG^{}")"
           echo "IOS_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
