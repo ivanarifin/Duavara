@@ -48,6 +48,14 @@ The **Publish Android APK** workflow runs automatically when an annotated `vX.Y.
 
 Keep the signing key and all signing credentials secret; never commit them to the repository. The workflow never overwrites an existing release tag. A GitHub Release APK is for direct distribution; build and submit a separately signed AAB for Google Play.
 
+## GitHub iOS releases
+
+The **Publish iOS IPA** workflow runs on the same annotated `vX.Y.Z` tags as the Android release. It builds the `Release` app for `iphoneos` with `id.vandev.duavara`, packages `Payload/Duavara.app` into `duavara-<version>.ipa`, verifies the bundle identifier and version against the tag, and attaches the IPA plus its `.sha256` checksum to the GitHub Release created by the Android workflow. It waits up to 30 minutes for that release to appear, so it also works when dispatched manually against a tag whose release already exists.
+
+The IPA is **unsigned** because the repository holds no Apple signing certificate. It cannot be installed as downloaded: re-sign it with your own Apple Developer certificate, for example with Xcode, Sideloadly, or AltStore, before installing it on a device. The workflow asserts that the archive stays unsigned so it can never be mistaken for a store submission build.
+
+For App Store or TestFlight distribution, build and sign locally in Xcode, or add distribution signing secrets and an export step; neither is configured here.
+
 ## Requirements
 
 - Node.js `>= 22.13.0` (from `package.json`)
