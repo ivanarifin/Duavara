@@ -28,9 +28,25 @@ const acceptedVulnerabilities = new Map([
   ['babel-plugin-module-resolver', ['glob']],
   [
     '@typescript-eslint/eslint-plugin',
-    ['@typescript-eslint/type-utils', '@typescript-eslint/utils'],
+    [
+      '@typescript-eslint/parser',
+      '@typescript-eslint/type-utils',
+      '@typescript-eslint/utils',
+    ],
   ],
   ['@typescript-eslint/parser', ['@typescript-eslint/typescript-estree']],
+  [
+    '@react-native/eslint-config',
+    [
+      '@typescript-eslint/eslint-plugin',
+      '@typescript-eslint/parser',
+      'eslint-plugin-jest',
+    ],
+  ],
+  [
+    'eslint-plugin-jest',
+    ['@typescript-eslint/eslint-plugin', '@typescript-eslint/utils'],
+  ],
   [
     '@typescript-eslint/type-utils',
     ['@typescript-eslint/typescript-estree', '@typescript-eslint/utils'],
@@ -77,10 +93,10 @@ const unresolved = vulnerabilities.filter(vulnerability => {
       typeof item === 'string' ? item : item.url?.split('/').pop() ?? '',
     )
     .sort();
-  return (
-    actualVia.length !== expectedVia.length ||
-    actualVia.some((item, index) => item !== [...expectedVia].sort()[index])
-  );
+  // npm 10 and npm 11 report slightly different intermediate chains for the
+  // same advisory, so require every reported item to be one we reviewed
+  // instead of an exact list match.
+  return actualVia.some(item => !expectedVia.includes(item));
 });
 
 if (unresolved.length) {
