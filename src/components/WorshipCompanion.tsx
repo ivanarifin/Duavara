@@ -1,3 +1,5 @@
+import { COLORS as T } from '@/ui/theme';
+import { PressableScale, ProgressRail, ValuePop } from '@/ui/motion';
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
@@ -24,16 +26,16 @@ import type {
 } from '@/services/worship';
 
 const COLORS = {
-  background: '#071D1A',
-  card: '#0D2B27',
-  cardRaised: '#123C35',
-  border: '#23564B',
-  text: '#FFF8E8',
-  textMuted: '#A5C3B8',
-  emerald: '#86D3B4',
-  emeraldDeep: '#1D6B56',
-  gold: '#EACB7D',
-  goldSoft: '#F5E6B5',
+  background: T.ink,
+  card: T.inkSoft,
+  cardRaised: T.surface,
+  border: T.line,
+  text: T.cream,
+  textMuted: T.muted,
+  emerald: T.mint,
+  emeraldDeep: T.moss,
+  gold: T.gold,
+  goldSoft: T.mintBright,
 };
 
 const DEFAULT_TASBIH: TasbihState = { count: 0, target: 33 };
@@ -154,12 +156,12 @@ export function WorshipCompanion({
           <Text style={styles.cardTitle}>Five daily prayers</Text>
           <Text style={styles.progressValue}>{prayedCount}/5</Text>
         </View>
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              { width: `${(prayedCount / 5) * 100}%` },
-            ]}
+        <View style={styles.progressRailWrap}>
+          <ProgressRail
+            value={prayedCount / 5}
+            height={6}
+            color={COLORS.emerald}
+            trackColor="#1A423A"
           />
         </View>
       </View>
@@ -196,11 +198,18 @@ export function WorshipCompanion({
                   {formatPrayerTime(prayer.time, use24HourTime)}
                 </Text>
               </View>
-              <Text
-                style={[styles.statusText, isPrayed && styles.statusComplete]}
+              <View
+                style={[
+                  styles.statusChip,
+                  isPrayed && styles.statusChipComplete,
+                ]}
               >
-                {isPrayed ? 'PRAYED' : 'MARK'}
-              </Text>
+                <Text
+                  style={[styles.statusText, isPrayed && styles.statusComplete]}
+                >
+                  {isPrayed ? 'PRAYED' : 'MARK'}
+                </Text>
+              </View>
             </Pressable>
           );
         })}
@@ -242,24 +251,23 @@ export function WorshipCompanion({
         </View>
 
         <View style={styles.countArea}>
-          <Text style={styles.count}>{tasbih.count}</Text>
+          <ValuePop trigger={tasbih.count}>
+            <Text style={styles.count}>{tasbih.count}</Text>
+          </ValuePop>
           <Text style={styles.cycleText}>
             {cycles} {cycles === 1 ? 'cycle' : 'cycles'} complete
           </Text>
         </View>
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.incrementButton,
-            pressed && styles.pressed,
-          ]}
+        <PressableScale
+          style={styles.incrementButton}
           onPress={handleTasbihIncrement}
           accessibilityRole="button"
           accessibilityLabel={`Increment Tasbih count, ${tasbih.count} of ${tasbih.target}`}
         >
           <Text style={styles.incrementText}>TAP TO COUNT</Text>
           <Text style={styles.incrementGlyph}>+</Text>
-        </Pressable>
+        </PressableScale>
         <Pressable
           style={({ pressed }) => [
             styles.resetButton,
@@ -399,17 +407,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
-  progressTrack: {
-    backgroundColor: '#1A423A',
-    borderRadius: 99,
-    height: 6,
-    marginTop: 12,
-    overflow: 'hidden',
+  progressRailWrap: { marginTop: 12 },
+  statusChip: {
+    alignItems: 'center',
+    borderColor: COLORS.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 34,
+    minWidth: 66,
+    paddingHorizontal: 10,
   },
-  progressFill: {
+  statusChipComplete: {
     backgroundColor: COLORS.emerald,
-    borderRadius: 99,
-    height: '100%',
+    borderColor: COLORS.emerald,
+  },
+  statusText: {
+    color: COLORS.textMuted,
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  statusComplete: {
+    color: COLORS.background,
   },
   prayerList: {
     backgroundColor: COLORS.card,
@@ -423,7 +443,7 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    minHeight: 76,
+    minHeight: 72,
     paddingHorizontal: 15,
   },
   prayerRowComplete: {
@@ -467,15 +487,6 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     fontSize: 13,
     marginTop: 3,
-  },
-  statusText: {
-    color: COLORS.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  statusComplete: {
-    color: COLORS.gold,
   },
   tasbihCard: {
     backgroundColor: COLORS.card,

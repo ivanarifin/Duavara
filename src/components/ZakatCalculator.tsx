@@ -1,3 +1,4 @@
+import { COLORS as T, FONTS as T_FONTS } from '@/ui/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { captureLocalDataEpoch, withStorageLock } from '@/services/storageLock';
 import {
@@ -24,17 +25,17 @@ const SILVER_NISAB_GRAMS = 595;
 const ZAKAT_RATE = 0.025;
 
 const COLORS = {
-  background: '#071D1A',
-  sheet: '#0D2B27',
-  raised: '#123C35',
-  border: '#2A5D50',
-  text: '#FFF8E8',
-  muted: '#A5C3B8',
-  emerald: '#86D3B4',
-  emeraldDeep: '#1D6B56',
-  gold: '#EACB7D',
-  parchment: '#F5E6B5',
-  coral: '#EF967C',
+  background: T.ink,
+  sheet: T.inkSoft,
+  raised: T.surface,
+  border: T.line,
+  text: T.cream,
+  muted: T.muted,
+  emerald: T.mint,
+  emeraldDeep: T.moss,
+  gold: T.gold,
+  parchment: T.parchment,
+  coral: T.coral,
 };
 
 type NisabBasis = 'gold' | 'silver';
@@ -457,8 +458,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: COLORS.text,
+    fontFamily: T_FONTS.display,
     fontSize: 28,
-    fontWeight: '800',
     letterSpacing: -0.7,
     marginTop: 4,
   },
@@ -504,9 +505,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   input: {
-    backgroundColor: COLORS.background,
-    borderColor: COLORS.border,
-    borderRadius: 11,
+    backgroundColor: COLORS.raised,
+    borderColor: 'rgba(250, 245, 233, 0.18)',
+    borderRadius: 12,
     borderWidth: 1,
     color: COLORS.text,
     fontSize: 16,

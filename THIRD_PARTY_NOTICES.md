@@ -36,6 +36,13 @@ These libraries provide on-device playback and private-document-directory downlo
 
 Duavara uses this library for the optional Qibla camera preview. Version 5.0.11 includes the upstream Android release-minification fix that preserves its native frame converter.
 
+## Motion and animation
+
+- `react-native-reanimated` 4.7.1 — https://github.com/software-mansion/react-native-reanimated — MIT License.
+- `react-native-worklets` 0.13.1 — https://github.com/software-mansion/react-native-worklets — MIT License.
+
+These libraries provide the interface animations: tab transitions, staggered card entrances, press feedback, the animated prayer progress rail, the Qibla needle spring, and the spring-driven bottom sheets.
+
 ## OpenStreetMap directions
 
 Saved-mosque directions open an external OpenStreetMap URL. Duavara does not bundle map tiles or use a paid map SDK. Nearby mosque data and directions remain subject to OpenStreetMap attribution and the relevant external service terms.

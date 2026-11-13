@@ -1,3 +1,4 @@
+import { COLORS as T } from '@/ui/theme';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -10,7 +11,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  initialWindowMetrics,
+} from 'react-native-safe-area-context';
 import {
   DEFAULT_QURAN_READER_PREFERENCES,
   QuranBookmark,
@@ -56,16 +60,16 @@ type SurahContent = {
 };
 
 const COLORS = {
-  ink: '#061B18',
-  deepEmerald: '#0B2925',
-  emerald: '#17483E',
-  parchment: '#FFF8E8',
-  parchmentMuted: '#E9DDC5',
-  gold: '#EACB7D',
-  mint: '#A8D9C2',
-  muted: '#8EA99B',
-  coral: '#EF967C',
-  line: 'rgba(255, 248, 232, 0.14)',
+  ink: T.inkDeep,
+  deepEmerald: T.inkSoft,
+  emerald: T.moss,
+  parchment: T.cream,
+  parchmentMuted: T.sand,
+  gold: T.gold,
+  mint: T.mint,
+  muted: T.muted,
+  coral: T.coral,
+  line: T.line,
 };
 
 const READING_PALETTES = {
@@ -96,6 +100,13 @@ export function QuranReader({ visible, onClose }: QuranReaderProps) {
 }
 
 function QuranReaderContent({ onClose }: { onClose: () => void }) {
+  // Modals render outside the provider tree in some test setups, so rely on
+  // the metrics captured when the app window was first measured.
+  const topInset = initialWindowMetrics?.insets.top ?? 0;
+  const headerInsetStyle = useMemo(
+    () => ({ paddingTop: topInset + 12 }),
+    [topInset],
+  );
   const [surahs, setSurahs] = useState<SurahSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -652,10 +663,10 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
       animationType="slide"
       onRequestClose={selectedSurah ? closeSelectedSurah : closeReader}
     >
-      <SafeAreaView style={styles.screen}>
+      <SafeAreaView style={styles.screen} edges={['bottom', 'left', 'right']}>
         {selectedSurah ? (
           <View style={styles.content}>
-            <View style={styles.header}>
+            <View style={[styles.header, headerInsetStyle]}>
               <Pressable
                 style={styles.navigationButton}
                 onPress={closeSelectedSurah}
@@ -858,7 +869,7 @@ function QuranReaderContent({ onClose }: { onClose: () => void }) {
           </View>
         ) : (
           <View style={styles.content}>
-            <View style={styles.header}>
+            <View style={[styles.header, headerInsetStyle]}>
               <View style={styles.headerTitles}>
                 <Text style={styles.eyebrow}>DUAVARA · QURAN</Text>
                 <Text style={styles.title}>Read & reflect</Text>
@@ -1628,12 +1639,12 @@ const styles = StyleSheet.create({
   searchRow: { flexDirection: 'row', marginTop: 16, gap: 8 },
   searchInput: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 48,
     borderWidth: 1,
-    borderColor: COLORS.line,
-    borderRadius: 12,
+    borderColor: 'rgba(250, 245, 233, 0.18)',
+    borderRadius: 14,
     color: COLORS.parchment,
-    paddingHorizontal: 13,
+    paddingHorizontal: 14,
     fontSize: 14,
     backgroundColor: COLORS.deepEmerald,
   },
