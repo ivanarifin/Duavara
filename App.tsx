@@ -135,6 +135,11 @@ type QuranShortcutRequest = { id: number };
 
 const QURAN_SHORTCUT_URL = /^duavara:\/\/quran\/?$/;
 
+const SUPPORT_DUAVARA_LINK = {
+  label: 'Support Duavara on Buy Me a Coffee',
+  url: 'https://buymeacoffee.com/ivanarifin',
+} as const;
+
 const ABOUT_LINKS = [
   {
     label: 'Open Duavara source repository',
@@ -4344,6 +4349,12 @@ function AboutView({
         </View>
       </View>
 
+      <Reveal delay={60}>
+        <SupportDuavaraCard
+          onPress={() => onOpenExternalUrl(SUPPORT_DUAVARA_LINK.url)}
+        />
+      </Reveal>
+
       <Text style={styles.aboutSectionLabel}>APP & PRIVACY</Text>
       {ABOUT_LINKS.slice(0, 4).map(link => (
         <AboutLink
@@ -4365,6 +4376,43 @@ function AboutView({
         {...ABOUT_LINKS[7]}
         onPress={() => onOpenExternalUrl(ABOUT_LINKS[7].url)}
       />
+    </View>
+  );
+}
+
+function SupportDuavaraCard({ onPress }: { onPress: () => Promise<void> }) {
+  return (
+    <View style={styles.aboutSupportCard}>
+      <View style={styles.aboutSupportHeader}>
+        <View
+          style={styles.aboutSupportMark}
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          <Text style={styles.aboutSupportMarkText}>♥</Text>
+        </View>
+        <View style={styles.aboutSupportCopy}>
+          <Text style={styles.aboutSupportKicker}>OPTIONAL SUPPORT</Text>
+          <Text style={styles.aboutSupportTitle}>Help Duavara grow.</Text>
+        </View>
+      </View>
+      <Text style={styles.aboutSupportDescription}>
+        A one-time coffee helps sustain thoughtful, privacy-first worship tools.
+      </Text>
+      <PressableScale
+        style={styles.aboutSupportButton}
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={SUPPORT_DUAVARA_LINK.label}
+        accessibilityHint="Opens Buy Me a Coffee in your browser."
+      >
+        <View style={styles.aboutSupportButtonCopy}>
+          <Text style={styles.aboutSupportButtonText}>DONATE HERE</Text>
+          <Text style={styles.aboutSupportButtonDetail}>BUY ME A COFFEE</Text>
+        </View>
+        <Text style={styles.aboutSupportButtonArrow}>↗</Text>
+      </PressableScale>
     </View>
   );
 }
@@ -5830,6 +5878,77 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.15,
+  },
+  aboutSupportCard: {
+    backgroundColor: 'rgba(217, 183, 107, 0.09)',
+    borderColor: 'rgba(217, 183, 107, 0.32)',
+    borderRadius: 22,
+    borderWidth: 1,
+    marginTop: 16,
+    padding: 18,
+  },
+  aboutSupportHeader: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  aboutSupportMark: {
+    alignItems: 'center',
+    backgroundColor: COLORS.gold,
+    borderRadius: 19,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  aboutSupportMarkText: {
+    color: COLORS.inkDeep,
+    fontSize: 18,
+    lineHeight: 21,
+  },
+  aboutSupportCopy: { flex: 1 },
+  aboutSupportKicker: {
+    color: COLORS.gold,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.3,
+  },
+  aboutSupportTitle: {
+    color: COLORS.cream,
+    fontFamily: FONTS.display,
+    fontSize: 20,
+    letterSpacing: -0.3,
+    marginTop: 3,
+  },
+  aboutSupportDescription: {
+    color: COLORS.mintBright,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 12,
+  },
+  aboutSupportButton: {
+    alignItems: 'center',
+    backgroundColor: COLORS.cream,
+    borderRadius: 999,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    minHeight: 58,
+    paddingHorizontal: 20,
+  },
+  aboutSupportButtonCopy: { flex: 1 },
+  aboutSupportButtonText: {
+    color: COLORS.inkDeep,
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  aboutSupportButtonDetail: {
+    color: COLORS.moss,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginTop: 2,
+  },
+  aboutSupportButtonArrow: {
+    color: COLORS.inkDeep,
+    fontSize: 22,
+    fontWeight: '900',
   },
   aboutSectionLabel: {
     color: COLORS.mint,
