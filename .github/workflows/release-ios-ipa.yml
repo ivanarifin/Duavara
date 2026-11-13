@@ -1,0 +1,200 @@
+name: Publish iOS IPA
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag matching package.json, for example v1.0.4
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-ios-ipa
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish unsigned iOS IPA
+    runs-on: macos-latest
+    timeout-minutes: 90
+    environment: production
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          fetch-depth: 0
+
+      - name: Validate release tag and version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            RELEASE_TAG="$PUSH_TAG"
+          else
+            RELEASE_TAG="$MANUAL_TAG"
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use the vX.Y.Z format." >&2
+            exit 1
+          fi
+          if [[ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ]]; then
+            echo "Release tag must be annotated." >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse "refs/tags/$RELEASE_TAG^{}")" != "$(git rev-parse HEAD)" ]]; then
+            echo "Checked-out commit does not match the requested tag." >&2
+            exit 1
+          fi
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$RELEASE_TAG" != "v$package_version" ]]; then
+            echo "Release tag $RELEASE_TAG does not match package.json version $package_version." >&2
+            exit 1
+          fi
+          echo "PACKAGE_VERSION=$package_version" >> "$GITHUB_ENV"
+
+      - name: Resolve iOS build number
+        run: |
+          set -euo pipefail
+          # CFBundleVersion only has to be a positive integer, so the tag's commit
+          # depth gives a deterministic value that grows along the release line.
+          build_number="$(git rev-list --count "refs/tags/$RELEASE_TAG^{}}")"
+          echo "IOS_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Ruby dependencies
+        run: bundle install
+
+      - name: Install CocoaPods dependencies
+        run: bundle exec pod install --project-directory=ios --deployment
+
+      - name: Validate versions
+        run: npm run version:check -- --ios-build-number "$IOS_BUILD_NUMBER"
+
+      - name: Build unsigned release app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace ios/Duavara.xcworkspace \
+            -scheme Duavara \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="$PACKAGE_VERSION" \
+            CURRENT_PROJECT_VERSION="$IOS_BUILD_NUMBER" \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/Duavara.app"
+          test -d "$app_path"
+          test -f "$app_path/main.jsbundle"
+          staging="$RUNNER_TEMP/ipa"
+          mkdir -p "$staging/Payload" dist
+          cp -R "$app_path" "$staging/Payload/"
+          ( cd "$staging" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/dist/duavara-$PACKAGE_VERSION.ipa" Payload )
+          ( cd dist && shasum -a 256 "duavara-$PACKAGE_VERSION.ipa" > "duavara-$PACKAGE_VERSION.ipa.sha256" )
+          ls -l dist
+
+      - name: Verify IPA contents
+        run: |
+          set -euo pipefail
+          ipa_path="dist/duavara-$PACKAGE_VERSION.ipa"
+          test -f "$ipa_path"
+          listing="$(unzip -l "$ipa_path")"
+          for required in \
+            'Payload/Duavara.app/Info.plist' \
+            'Payload/Duavara.app/main.jsbundle' \
+            'Payload/Duavara.app/Duavara'; do
+            if ! grep -qF "$required" <<< "$listing"; then
+              echo "IPA is missing $required" >&2
+              exit 1
+            fi
+          done
+          unpacked="$RUNNER_TEMP/unpacked"
+          mkdir -p "$unpacked"
+          unzip -q "$ipa_path" -d "$unpacked"
+          plist="$unpacked/Payload/Duavara.app/Info.plist"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")"
+          short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+          build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")"
+          if [[ "$bundle_id" != "id.vandev.duavara" ]]; then
+            echo "Unexpected CFBundleIdentifier: $bundle_id" >&2
+            exit 1
+          fi
+          if [[ "$short_version" != "$PACKAGE_VERSION" ]]; then
+            echo "CFBundleShortVersionString $short_version does not match $PACKAGE_VERSION." >&2
+            exit 1
+          fi
+          if [[ "$build_number" != "$IOS_BUILD_NUMBER" ]]; then
+            echo "CFBundleVersion $build_number does not match $IOS_BUILD_NUMBER." >&2
+            exit 1
+          fi
+          if codesign -dv "$unpacked/Payload/Duavara.app" >/dev/null 2>&1; then
+            echo "IPA must stay unsigned on this workflow." >&2
+            exit 1
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: duavara-${{ env.RELEASE_TAG }}-ipa
+          path: |
+            dist/*.ipa
+            dist/*.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Wait for the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "Release $RELEASE_TAG is not published yet (attempt $attempt of 60)."
+            sleep 30
+          done
+          echo "Release $RELEASE_TAG did not appear within 30 minutes." >&2
+          exit 1
+
+      - name: Attach IPA to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            "dist/duavara-$PACKAGE_VERSION.ipa" \
+            "dist/duavara-$PACKAGE_VERSION.ipa.sha256" \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
