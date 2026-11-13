@@ -12,6 +12,44 @@ const acceptedVulnerabilities = new Map([
     'react-native',
     ['@react-native/community-cli-plugin', '@react-native/virtualized-lists'],
   ],
+
+  // Build and test tooling only. None of these packages is bundled into the
+  // Android or iOS app; they run on developer machines and CI. They are
+  // accepted until the Jest, ESLint and React Native CLI majors that carry the
+  // upstream fixes are adopted.
+  ['@jest/core', ['jest-config']],
+  ['create-jest', ['jest-config']],
+  ['jest', ['@jest/core', 'jest-cli']],
+  ['jest-cli', ['@jest/core', 'create-jest', 'jest-config']],
+  ['jest-config', ['deepmerge']],
+  ['deepmerge', ['GHSA-gcqx-w48m-w2h4']],
+  ['glob', ['GHSA-3g3m-2fjr-6pw4', 'minimatch']],
+  ['minimatch', ['GHSA-g3hv-75wg-m249']],
+  ['babel-plugin-module-resolver', ['glob']],
+  [
+    '@typescript-eslint/eslint-plugin',
+    ['@typescript-eslint/type-utils', '@typescript-eslint/utils'],
+  ],
+  ['@typescript-eslint/parser', ['@typescript-eslint/typescript-estree']],
+  [
+    '@typescript-eslint/type-utils',
+    ['@typescript-eslint/typescript-estree', '@typescript-eslint/utils'],
+  ],
+  ['@typescript-eslint/typescript-estree', ['minimatch']],
+  ['@typescript-eslint/utils', ['@typescript-eslint/typescript-estree']],
+  [
+    '@react-native-community/cli',
+    [
+      '@react-native-community/cli-config',
+      '@react-native-community/cli-doctor',
+      'deepmerge',
+    ],
+  ],
+  ['@react-native-community/cli-config', ['deepmerge']],
+  [
+    '@react-native-community/cli-doctor',
+    ['@react-native-community/cli-config', 'deepmerge'],
+  ],
 ]);
 
 const result = spawnSync('npm', ['audit', '--json'], {
@@ -22,7 +60,10 @@ const result = spawnSync('npm', ['audit', '--json'], {
 let report;
 try {
   report = JSON.parse(result.stdout);
-} catch {
+} catch (parseError) {
+  if (parseError instanceof Error) {
+    process.stderr.write(`${parseError.message}\n`);
+  }
   process.stderr.write(result.stderr || result.stdout);
   process.exit(result.status || 1);
 }
@@ -53,6 +94,6 @@ if (unresolved.length) {
 
 if (vulnerabilities.length) {
   console.log(
-    'Accepted build-tool exceptions: the React Native 0.87.1 Metro chain is awaiting a compatible upstream fix; its image-size findings are GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq.',
+    'Accepted build-tool exceptions: the React Native 0.87.1 Metro chain is awaiting a compatible upstream fix; its image-size findings are GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq. Jest, ESLint/TypeScript-ESLint and React Native CLI findings are development-only and are tracked for a future tooling upgrade.',
   );
 }
