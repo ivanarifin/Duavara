@@ -1,3 +1,4 @@
+import { COLORS as T } from '@/ui/theme';
 import { StyleSheet, Text, View } from 'react-native';
 import { formatCountdown, formatPrayerTime } from '@/domain/prayer';
 import { DailyPrayerData } from '@/domain/types';
@@ -12,14 +13,14 @@ export type RamadanDashboardProps = {
 type RamadanPhase = 'beforeImsak' | 'fasting' | 'completed';
 
 const COLORS = {
-  background: '#051816',
-  panel: '#08201E',
-  panelRaised: '#10332F',
-  border: '#1F5147',
-  cream: '#FFF8E8',
-  mint: '#C7F0DA',
-  mutedMint: '#91D6BE',
-  gold: '#EACB7D',
+  background: T.ink,
+  panel: T.inkSoft,
+  panelRaised: T.surface,
+  border: T.line,
+  cream: T.cream,
+  mint: T.mintBright,
+  mutedMint: T.mint,
+  gold: T.gold,
 };
 
 function parseRamadanDay(label: string): number | null {

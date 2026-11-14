@@ -1,14 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, Image, StyleSheet, Text, View } from 'react-native';
 import appIconAsset from '@/assets/duavara-app-icon.png';
+import { COLORS as T } from '@/ui/theme';
 
 const COLORS = {
-  ink: '#08201E',
-  moss: '#1F5147',
-  mint: '#91D6BE',
-  mintBright: '#C7F0DA',
-  cream: '#FFF8E8',
-  gold: '#EACB7D',
+  ink: T.ink,
+  moss: T.moss,
+  mint: T.mint,
+  mintBright: T.mintBright,
+  cream: T.cream,
+  gold: T.gold,
 };
 
 const NATIVE_DRIVER = { useNativeDriver: true } as const;

@@ -7,5 +7,6 @@ module.exports = {
         alias: { '@': './src' },
       },
     ],
+    'react-native-worklets/plugin',
   ],
 };

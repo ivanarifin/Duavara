@@ -12,7 +12,6 @@ import {
   Alert,
   Image,
   Linking,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -24,11 +23,17 @@ import {
   Text,
   TextInput,
   View,
+  type ScrollViewInstance,
 } from 'react-native';
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import {
   AlAdhanCalculationOptions,
   AlAdhanMethod,
@@ -63,6 +68,17 @@ import {
   toDailyPrayerData,
 } from '@/domain';
 import appIconAsset from '@/assets/duavara-app-icon.png';
+import {
+  MotionSheet,
+  PressableScale,
+  ProgressRail,
+  PulseDot,
+  Reveal,
+  ScreenTransition,
+  Skeleton,
+  ValuePop,
+} from '@/ui/motion';
+import { COLORS, FONTS, SHADOW } from '@/ui/theme';
 import type { AppInfo } from '@/services/appInfo';
 import type { CompassHeading } from '@/services/compass';
 import {
@@ -179,23 +195,6 @@ export function isQuranShortcutUrl(url: string | null | undefined): boolean {
   return typeof url === 'string' && QURAN_SHORTCUT_URL.test(url);
 }
 
-const COLORS = {
-  ink: '#08201E',
-  inkSoft: '#10332F',
-  inkDeep: '#051816',
-  moss: '#1F5147',
-  mint: '#91D6BE',
-  mintBright: '#C7F0DA',
-  cream: '#FFF8E8',
-  parchment: '#F6EEDC',
-  sand: '#D6C9AD',
-  muted: '#A9B9AC',
-  line: 'rgba(255, 248, 232, 0.14)',
-  gold: '#EACB7D',
-  coral: '#EF967C',
-  white: '#FFFFFF',
-};
-
 const ARABIC_PRAYER_NAMES: Record<PrayerName, string> = {
   Fajr: 'الفجر',
   Dhuhr: 'الظهر',
@@ -210,6 +209,14 @@ const PRAYER_ICONS: Record<PrayerName, string> = {
   Asr: '◐',
   Maghrib: '◑',
   Isha: '☾',
+};
+
+const CALENDAR_COLUMN_LABELS: Record<PrayerName, string> = {
+  Fajr: 'FJR',
+  Dhuhr: 'DHR',
+  Asr: 'ASR',
+  Maghrib: 'MGH',
+  Isha: 'ISH',
 };
 
 const TAB_ITEMS: { id: Tab; label: string; icon: string }[] = [
@@ -265,7 +272,7 @@ function profileName(kind: LocationProfileKind): string {
     work: 'Work',
     mosque: 'Mosque',
     travel: 'Travel',
-    custom: 'Saved place',
+    custom: 'My place',
   }[kind];
 }
 
@@ -555,6 +562,7 @@ function Duavara({
   const settingsTransactionRef = useRef<Promise<void>>(Promise.resolve());
   const cacheCommitRef = useRef<Promise<void>>(Promise.resolve());
   const widgetCommitRef = useRef<Promise<void>>(Promise.resolve());
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const beginRequest = useCallback(() => {
     requestTokenRef.current += 1;
     return requestTokenRef.current;
@@ -1092,6 +1100,7 @@ function Duavara({
   const selectTab = useCallback(
     (tab: Tab) => {
       setActiveTab(tab);
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
       if (tab === 'calendar' && monthSchedules.length === 0) {
         loadMonth().catch(() => undefined);
       }
@@ -1759,22 +1768,7 @@ function Duavara({
 
   return (
     <View style={styles.app}>
-      <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingTop: insets.top + 16, paddingBottom: 118 + insets.bottom },
-        ]}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={() => {
-              refreshActive().catch(() => undefined);
-            }}
-            tintColor={COLORS.mintBright}
-          />
-        }
-      >
+      <View style={[styles.appBar, { paddingTop: insets.top + 14 }]}>
         <Header
           coordinates={coordinates}
           regionName={regionName}
@@ -1786,16 +1780,38 @@ function Duavara({
             refreshDeviceLocation().catch(() => undefined);
           }}
         />
+      </View>
+
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: 124 + insets.bottom },
+        ]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => {
+              refreshActive().catch(() => undefined);
+            }}
+            tintColor={COLORS.mint}
+            progressViewOffset={8}
+          />
+        }
+      >
         {message ? (
-          <Pressable
+          <PressableScale
             style={styles.messageBanner}
             onPress={() => setMessage(null)}
+            accessibilityRole="button"
+            accessibilityLabel={`Dismiss message: ${message}`}
           >
             <Text style={styles.messageText}>{message}</Text>
             <Text style={styles.messageDismiss}>×</Text>
-          </Pressable>
+          </PressableScale>
         ) : null}
-        {content}
+        <ScreenTransition transitionKey={activeTab}>{content}</ScreenTransition>
       </ScrollView>
 
       <BottomTabs
@@ -2057,37 +2073,61 @@ function Header({
   onSettings: () => void;
   onLocation: () => void;
 }) {
+  const locationLabel = formatLocationLabel(
+    regionName,
+    activeProfileName,
+    coordinates,
+  );
+
   return (
     <View style={styles.header}>
       <View style={styles.headerIdentity}>
-        <Text style={styles.wordmark}>Duavara</Text>
-        <View style={styles.locationPill}>
-          <Text style={styles.locationDot}>●</Text>
+        <Text style={styles.wordmark} accessibilityRole="header">
+          Duavara
+        </Text>
+        <PressableScale
+          style={styles.locationPill}
+          onPress={onLocation}
+          accessibilityRole="button"
+          accessibilityLabel={`${locationLabel}. Tap to update from device location.`}
+        >
+          <PulseDot size={6} color={COLORS.mint} />
           <Text style={styles.locationText} numberOfLines={1}>
-            {formatLocationLabel(regionName, activeProfileName, coordinates)}
+            {locationLabel}
           </Text>
-        </View>
+        </PressableScale>
       </View>
       <View style={styles.headerActions}>
-        <Pressable
+        <PressableScale
           style={styles.headerRefreshButton}
           onPress={onLocation}
           accessibilityRole="button"
           accessibilityLabel="Refresh location from device"
           accessibilityHint="Updates your active saved place from device GPS."
-          hitSlop={4}
+          hitSlop={6}
         >
           <LocationPinIcon />
-        </Pressable>
-        <Pressable
+        </PressableScale>
+        <PressableScale
           style={styles.settingsButton}
           onPress={onSettings}
           accessibilityRole="button"
           accessibilityLabel="Open prayer preferences"
+          hitSlop={6}
         >
-          <Text style={styles.settingsGlyph}>☷</Text>
-        </Pressable>
+          <SlidersGlyph />
+        </PressableScale>
       </View>
+    </View>
+  );
+}
+
+function SlidersGlyph() {
+  return (
+    <View accessible={false} style={styles.slidersGlyph}>
+      <View style={[styles.sliderLine, styles.sliderLineWide]} />
+      <View style={[styles.sliderLine, styles.sliderLineShort]} />
+      <View style={[styles.sliderLine, styles.sliderLineMid]} />
     </View>
   );
 }
@@ -2129,6 +2169,21 @@ function TodayView({
     ? formatCountdown(nextPrayer.date.getTime() - clock.getTime())
     : '—';
 
+  const nowMs = clock.getTime();
+  const previousPrayer = [...today.prayers]
+    .reverse()
+    .find(prayer => prayer.date.getTime() <= nowMs);
+  const intervalMs =
+    nextPrayer && previousPrayer
+      ? nextPrayer.date.getTime() - previousPrayer.date.getTime()
+      : 0;
+  const elapsedMs =
+    nextPrayer && previousPrayer
+      ? Math.max(0, nowMs - previousPrayer.date.getTime())
+      : 0;
+  const prayerProgress =
+    intervalMs > 0 ? Math.min(1, elapsedMs / intervalMs) : 0;
+
   return (
     <>
       <View style={styles.dateBlock}>
@@ -2138,36 +2193,65 @@ function TodayView({
         <Text style={styles.dateTitle}>{formatLongDate(clock)}</Text>
       </View>
 
-      <View style={styles.nextCard}>
-        <View style={styles.moon}>
-          <View style={styles.moonCutout} />
-          <View style={styles.starOne} />
-          <View style={styles.starTwo} />
-        </View>
-        <Text style={styles.nextEyebrow}>
-          {nextPrayer ? 'NEXT PRAYER' : 'DAY COMPLETE'}
-        </Text>
-        <Text style={styles.nextName}>{nextPrayer?.name ?? 'Rest well'}</Text>
-        <Text style={styles.nextArabic}>
-          {nextPrayer ? ARABIC_PRAYER_NAMES[nextPrayer.name] : 'ليلة طيبة'}
-        </Text>
-        <View style={styles.nextTimeRow}>
-          <Text style={styles.nextTime}>
-            {nextPrayer
-              ? formatPrayerTime(nextPrayer.time, use24HourTime)
-              : '—'}
-          </Text>
-          <View style={styles.countdownPill}>
-            <Text style={styles.countdownLabel}>IN</Text>
-            <Text style={styles.countdownValue}>{countdown}</Text>
+      <Reveal delay={40}>
+        <View style={styles.nextCard}>
+          <View style={styles.heroGlow} />
+          <View style={styles.heroOrbitOuter} />
+          <View style={styles.heroOrbitInner} />
+
+          <View style={styles.heroTopRow}>
+            <View style={styles.heroKickerRow}>
+              {nextPrayer ? (
+                <PulseDot size={6} color={COLORS.mintBright} />
+              ) : null}
+              <Text style={styles.nextEyebrow}>
+                {nextPrayer ? 'NEXT PRAYER' : 'DAY COMPLETE'}
+              </Text>
+            </View>
+            <View style={styles.countdownPill}>
+              <Text style={styles.countdownLabel}>IN</Text>
+              <ValuePop trigger={countdown}>
+                <Text style={styles.countdownValue}>{countdown}</Text>
+              </ValuePop>
+            </View>
           </View>
+
+          <View style={styles.heroNameRow}>
+            <View style={styles.heroNameBlock}>
+              <Text
+                style={styles.nextName}
+                numberOfLines={1}
+                ellipsizeMode="clip"
+              >
+                {nextPrayer?.name ?? 'Rest well'}
+              </Text>
+              <Text style={styles.nextArabic}>
+                {nextPrayer
+                  ? ARABIC_PRAYER_NAMES[nextPrayer.name]
+                  : 'ليلة طيبة'}
+              </Text>
+            </View>
+            <Text style={styles.nextTime} numberOfLines={1}>
+              {nextPrayer
+                ? formatPrayerTime(nextPrayer.time, use24HourTime)
+                : '—'}
+            </Text>
+          </View>
+
+          <ProgressRail
+            value={prayerProgress}
+            color={COLORS.mintBright}
+            trackColor="rgba(203, 243, 224, 0.16)"
+            height={5}
+          />
+
+          <Text style={styles.nextHint}>
+            {currentPrayer
+              ? `${currentPrayer.name} is in progress`
+              : 'A quiet moment before Fajr'}
+          </Text>
         </View>
-        <Text style={styles.nextHint}>
-          {currentPrayer
-            ? `${currentPrayer.name} is in progress`
-            : 'A quiet moment before Fajr'}
-        </Text>
-      </View>
+      </Reveal>
 
       <RamadanDashboard
         schedule={today}
@@ -2177,39 +2261,58 @@ function TodayView({
       />
 
       {fastingRoutine !== 'off' ? (
-        <View
-          style={[
-            styles.fastingStatusCard,
-            isFastingToday && styles.fastingStatusCardActive,
-          ]}
-          accessible
-          accessibilityLabel={
-            isFastingToday
-              ? `Fasting today. Imsak is ${formatPrayerTime(
-                  today.imsak.time,
-                  use24HourTime,
-                )}.`
-              : 'Not a fasting day in your selected routine.'
-          }
-        >
-          <Text style={styles.fastingStatusKicker}>FASTING COMPANION</Text>
-          <Text style={styles.fastingStatusTitle}>
-            {isFastingToday ? 'Fasting today' : 'Rest day'}
-          </Text>
-          <Text style={styles.fastingStatusText}>
-            {isFastingToday
-              ? `Imsak ${formatPrayerTime(
-                  today.imsak.time,
-                  use24HourTime,
-                )} · Iftar at Maghrib ${formatPrayerTime(
-                  today.timings.Maghrib,
-                  use24HourTime,
-                )}`
-              : fastingRoutine === 'dawud'
-              ? 'Your Dawud cycle resumes on the next alternating day.'
-              : 'Your next voluntary fast is Monday or Thursday.'}
-          </Text>
-        </View>
+        <Reveal delay={90}>
+          <View
+            style={[
+              styles.fastingStatusCard,
+              isFastingToday && styles.fastingStatusCardActive,
+            ]}
+            accessible
+            accessibilityLabel={
+              isFastingToday
+                ? `Fasting today. Imsak is ${formatPrayerTime(
+                    today.imsak.time,
+                    use24HourTime,
+                  )}.`
+                : 'Not a fasting day in your selected routine.'
+            }
+          >
+            <View
+              style={[
+                styles.fastingBadge,
+                isFastingToday && styles.fastingBadgeActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.fastingBadgeGlyph,
+                  isFastingToday && styles.fastingBadgeGlyphActive,
+                ]}
+              >
+                ☾
+              </Text>
+            </View>
+            <View style={styles.fastingBody}>
+              <Text style={styles.fastingStatusKicker}>FASTING COMPANION</Text>
+              <Text style={styles.fastingStatusTitle}>
+                {isFastingToday ? 'Fasting today' : 'Rest day'}
+              </Text>
+              <Text style={styles.fastingStatusText}>
+                {isFastingToday
+                  ? `Imsak ${formatPrayerTime(
+                      today.imsak.time,
+                      use24HourTime,
+                    )} · Iftar at Maghrib ${formatPrayerTime(
+                      today.timings.Maghrib,
+                      use24HourTime,
+                    )}`
+                  : fastingRoutine === 'dawud'
+                  ? 'Your Dawud cycle resumes on the next alternating day.'
+                  : 'Your next voluntary fast is Monday or Thursday.'}
+              </Text>
+            </View>
+          </View>
+        </Reveal>
       ) : null}
 
       <View style={styles.sectionHeader}>
@@ -2217,58 +2320,80 @@ function TodayView({
         <Text style={styles.sectionMeta}>{today.timezone ?? 'Local time'}</Text>
       </View>
       <View style={styles.prayerList}>
-        {today.prayers.map(prayer => {
+        {today.prayers.map((prayer, index) => {
           const isNext =
             prayer.name === nextPrayer?.name &&
             prayer.date.getDate() === nextPrayer?.date.getDate();
           const isCurrent = prayer.name === currentPrayer?.name;
+          const isPast =
+            prayer.date.getTime() <= nowMs && !isNext && !isCurrent;
           return (
-            <View
+            <Reveal
               key={prayer.name}
-              style={[styles.prayerRow, isNext && styles.prayerRowNext]}
-              accessible
-              accessibilityLabel={`${prayer.name}, ${formatPrayerTime(
-                prayer.time,
-                use24HourTime,
-              )}${isNext ? ', next prayer' : ''}`}
+              delay={Math.min(index * 45, 220)}
+              distance={10}
             >
               <View
-                style={[styles.prayerIcon, isNext && styles.prayerIconNext]}
+                style={[styles.prayerRow, isNext && styles.prayerRowNext]}
+                accessible
+                accessibilityLabel={`${prayer.name}, ${formatPrayerTime(
+                  prayer.time,
+                  use24HourTime,
+                )}${isNext ? ', next prayer' : ''}`}
               >
-                <Text
+                <View
                   style={[
-                    styles.prayerIconText,
-                    isNext && styles.prayerIconTextNext,
+                    styles.prayerIcon,
+                    isNext && styles.prayerIconNext,
+                    isPast && styles.prayerIconPast,
                   ]}
                 >
-                  {PRAYER_ICONS[prayer.name]}
-                </Text>
-              </View>
-              <View style={styles.prayerNameBlock}>
-                <View style={styles.prayerNameRow}>
                   <Text
-                    style={[styles.prayerName, isNext && styles.prayerNameNext]}
+                    style={[
+                      styles.prayerIconText,
+                      isNext && styles.prayerIconTextNext,
+                      isPast && styles.prayerIconTextPast,
+                    ]}
                   >
-                    {prayer.name}
+                    {PRAYER_ICONS[prayer.name]}
                   </Text>
-                  {isCurrent ? <Text style={styles.nowBadge}>NOW</Text> : null}
-                  {isNext ? <Text style={styles.nextBadge}>NEXT</Text> : null}
                 </View>
-                <Text style={styles.prayerArabic}>
-                  {ARABIC_PRAYER_NAMES[prayer.name]}
+                <View style={styles.prayerNameBlock}>
+                  <View style={styles.prayerNameRow}>
+                    <Text
+                      style={[
+                        styles.prayerName,
+                        isNext && styles.prayerNameNext,
+                        isPast && styles.prayerNamePast,
+                      ]}
+                    >
+                      {prayer.name}
+                    </Text>
+                    {isCurrent ? (
+                      <Text style={styles.nowBadge}>NOW</Text>
+                    ) : null}
+                    {isNext ? <Text style={styles.nextBadge}>NEXT</Text> : null}
+                  </View>
+                  <Text style={styles.prayerArabic}>
+                    {ARABIC_PRAYER_NAMES[prayer.name]}
+                  </Text>
+                </View>
+                <Text
+                  style={[
+                    styles.prayerTime,
+                    isNext && styles.prayerTimeNext,
+                    isPast && styles.prayerTimePast,
+                  ]}
+                >
+                  {formatPrayerTime(prayer.time, use24HourTime)}
                 </Text>
               </View>
-              <Text
-                style={[styles.prayerTime, isNext && styles.prayerTimeNext]}
-              >
-                {formatPrayerTime(prayer.time, use24HourTime)}
-              </Text>
-            </View>
+            </Reveal>
           );
         })}
       </View>
 
-      <Pressable
+      <PressableScale
         style={styles.shareTimesButton}
         onPress={() => {
           Share.share({
@@ -2280,7 +2405,7 @@ function TodayView({
       >
         <Text style={styles.shareTimesText}>SHARE TODAY’S TIMES</Text>
         <Text style={styles.shareTimesIcon}>↗</Text>
-      </Pressable>
+      </PressableScale>
 
       <WorshipCompanion schedule={today} use24HourTime={use24HourTime} />
 
@@ -2307,6 +2432,19 @@ function CalendarView({
   const [selectedSchedule, setSelectedSchedule] =
     useState<DailyPrayerData | null>(null);
   const nowKey = formatLocalDateKey(new Date());
+  const monthLabel = schedules.length
+    ? localDateFromSchedule(schedules[0].date).toLocaleDateString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      })
+    : 'Prayer calendar';
+  const calendarColumns: PrayerName[] = [
+    'Fajr',
+    'Dhuhr',
+    'Asr',
+    'Maghrib',
+    'Isha',
+  ];
 
   return (
     <>
@@ -2318,84 +2456,103 @@ function CalendarView({
         </Text>
       </View>
       {isLoading && !schedules.length ? <LoadingState compact /> : null}
-      <View style={styles.calendarHeader}>
-        <Text style={[styles.calendarCellDate, styles.calendarHeaderText]}>
-          DAY
-        </Text>
-        <Text style={[styles.calendarCellTime, styles.calendarHeaderText]}>
-          FAJR
-        </Text>
-        <Text style={[styles.calendarCellTime, styles.calendarHeaderText]}>
-          DHUHR
-        </Text>
-        <Text style={[styles.calendarCellTime, styles.calendarHeaderText]}>
-          MAGHRIB
-        </Text>
-      </View>
-      <View style={styles.calendarList}>
-        {schedules.map(schedule => {
-          const scheduleDate = localDateFromSchedule(schedule.date);
-          const isToday = schedule.date === nowKey;
-          return (
-            <Pressable
-              key={schedule.date}
-              style={({ pressed }) => [
-                styles.calendarRow,
-                isToday && styles.calendarRowToday,
-                pressed && styles.calendarRowPressed,
-              ]}
-              onPress={() => setSelectedSchedule(schedule)}
-              accessibilityRole="button"
-              accessibilityLabel={`View all prayer times for ${schedule.date}`}
-            >
-              <View style={styles.calendarCellDate}>
-                <Text
-                  style={[
-                    styles.calendarDay,
-                    isToday && styles.calendarTodayText,
+
+      <View style={styles.calendarCard}>
+        <View style={styles.calendarCardHeader}>
+          <Text style={styles.calendarCardTitle}>{monthLabel}</Text>
+          <Text style={styles.calendarCardMeta}>{schedules.length} days</Text>
+        </View>
+
+        <View style={styles.calendarHeader}>
+          <Text style={[styles.calendarHeaderCell, styles.calendarDateCell]}>
+            DAY
+          </Text>
+          {calendarColumns.map(prayer => (
+            <Text key={prayer} style={styles.calendarHeaderCell}>
+              {CALENDAR_COLUMN_LABELS[prayer]}
+            </Text>
+          ))}
+        </View>
+
+        <View style={styles.calendarList}>
+          {schedules.map((schedule, index) => {
+            const scheduleDate = localDateFromSchedule(schedule.date);
+            const isToday = schedule.date === nowKey;
+            return (
+              <Reveal
+                key={schedule.date}
+                delay={Math.min(index * 18, 220)}
+                distance={8}
+              >
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.calendarRow,
+                    index === schedules.length - 1 && styles.calendarRowLast,
+                    isToday && styles.calendarRowToday,
+                    pressed && styles.calendarRowPressed,
                   ]}
+                  onPress={() => setSelectedSchedule(schedule)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`View all prayer times for ${schedule.date}`}
                 >
-                  {scheduleDate.getDate()}
-                </Text>
-                <Text
-                  style={[
-                    styles.calendarWeekday,
-                    isToday && styles.calendarTodayText,
-                  ]}
-                >
-                  {scheduleDate
-                    .toLocaleDateString('en-US', { weekday: 'short' })
-                    .toUpperCase()}
-                </Text>
-              </View>
-              <Text
-                style={[
-                  styles.calendarCellTime,
-                  isToday && styles.calendarTodayText,
-                ]}
-              >
-                {formatPrayerTime(schedule.timings.Fajr, use24HourTime)}
-              </Text>
-              <Text
-                style={[
-                  styles.calendarCellTime,
-                  isToday && styles.calendarTodayText,
-                ]}
-              >
-                {formatPrayerTime(schedule.timings.Dhuhr, use24HourTime)}
-              </Text>
-              <Text
-                style={[
-                  styles.calendarCellTime,
-                  isToday && styles.calendarTodayText,
-                ]}
-              >
-                {formatPrayerTime(schedule.timings.Maghrib, use24HourTime)}
-              </Text>
-            </Pressable>
-          );
-        })}
+                  <View
+                    style={[styles.calendarDateCell, styles.calendarDateColumn]}
+                  >
+                    <Text
+                      style={[
+                        styles.calendarDay,
+                        isToday && styles.calendarTodayText,
+                      ]}
+                    >
+                      {scheduleDate.getDate()}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.calendarWeekday,
+                        isToday && styles.calendarTodayText,
+                      ]}
+                    >
+                      {scheduleDate
+                        .toLocaleDateString('en-US', { weekday: 'short' })
+                        .toUpperCase()}
+                    </Text>
+                  </View>
+                  {calendarColumns.map(prayer => {
+                    const [clockPart, meridiem] = formatPrayerTime(
+                      schedule.timings[prayer],
+                      use24HourTime,
+                    ).split(' ');
+                    return (
+                      <View key={prayer} style={styles.calendarCell}>
+                        <Text
+                          style={[
+                            styles.calendarCellTime,
+                            isToday && styles.calendarTodayText,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {clockPart}
+                        </Text>
+                        {meridiem ? (
+                          <Text
+                            style={[
+                              styles.calendarCellMeridiem,
+                              isToday && styles.calendarTodayText,
+                            ]}
+                          >
+                            {meridiem}
+                          </Text>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                </Pressable>
+              </Reveal>
+            );
+          })}
+        </View>
       </View>
+
       <CalendarDayDetails
         schedule={selectedSchedule}
         use24HourTime={use24HourTime}
@@ -2414,75 +2571,81 @@ function CalendarDayDetails({
   use24HourTime: boolean;
   onClose: () => void;
 }) {
-  if (!schedule) return null;
-  const date = localDateFromSchedule(schedule.date);
+  const [lastSchedule, setLastSchedule] = useState<DailyPrayerData | null>(
+    schedule,
+  );
+
+  useEffect(() => {
+    if (schedule) setLastSchedule(schedule);
+  }, [schedule]);
+
+  const activeSchedule = schedule ?? lastSchedule;
+  if (!activeSchedule) return null;
+  const date = localDateFromSchedule(activeSchedule.date);
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <Pressable style={styles.modalDismissArea} onPress={onClose} />
-        <View style={styles.calendarDetailSheet}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.calendarDetailHeader}>
-            <View>
-              <Text style={styles.sheetKicker}>DAILY TIMETABLE</Text>
-              <Text style={styles.calendarDetailTitle}>
-                {date.toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  month: 'long',
-                  day: 'numeric',
-                })}
+    <MotionSheet
+      visible={!!schedule}
+      onRequestClose={onClose}
+      style={styles.calendarDetailSheet}
+    >
+      <View style={styles.sheetHandle} />
+      <View style={styles.calendarDetailHeader}>
+        <View style={styles.calendarDetailHeading}>
+          <Text style={styles.sheetKicker}>DAILY TIMETABLE</Text>
+          <Text style={styles.calendarDetailTitle} numberOfLines={1}>
+            {date.toLocaleDateString('en-US', {
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+            })}
+          </Text>
+        </View>
+        <PressableScale
+          style={styles.closeButton}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close calendar prayer details"
+        >
+          <Text style={styles.closeText}>×</Text>
+        </PressableScale>
+      </View>
+      <View style={styles.imsakDetailRow}>
+        <Text style={styles.imsakDetailLabel}>IMSAK</Text>
+        <Text style={styles.imsakDetailTime}>
+          {formatPrayerTime(activeSchedule.imsak.time, use24HourTime)}
+        </Text>
+      </View>
+      <View style={styles.calendarDetailPrayerList}>
+        {activeSchedule.prayers.map(prayer => (
+          <View style={styles.calendarDetailPrayerRow} key={prayer.name}>
+            <View style={styles.calendarDetailPrayerNames}>
+              <Text style={styles.calendarDetailPrayerName}>{prayer.name}</Text>
+              <Text style={styles.calendarDetailPrayerArabic}>
+                {ARABIC_PRAYER_NAMES[prayer.name]}
               </Text>
             </View>
-            <Pressable
-              style={styles.closeButton}
-              onPress={onClose}
-              accessibilityRole="button"
-              accessibilityLabel="Close calendar prayer details"
-            >
-              <Text style={styles.closeText}>×</Text>
-            </Pressable>
-          </View>
-          <View style={styles.imsakDetailRow}>
-            <Text style={styles.imsakDetailLabel}>IMSAK</Text>
-            <Text style={styles.imsakDetailTime}>
-              {formatPrayerTime(schedule.imsak.time, use24HourTime)}
+            <Text style={styles.calendarDetailPrayerTime}>
+              {formatPrayerTime(prayer.time, use24HourTime)}
             </Text>
           </View>
-          <View style={styles.calendarDetailPrayerList}>
-            {schedule.prayers.map(prayer => (
-              <View style={styles.calendarDetailPrayerRow} key={prayer.name}>
-                <View>
-                  <Text style={styles.calendarDetailPrayerName}>
-                    {prayer.name}
-                  </Text>
-                  <Text style={styles.calendarDetailPrayerArabic}>
-                    {ARABIC_PRAYER_NAMES[prayer.name]}
-                  </Text>
-                </View>
-                <Text style={styles.calendarDetailPrayerTime}>
-                  {formatPrayerTime(prayer.time, use24HourTime)}
-                </Text>
-              </View>
-            ))}
-          </View>
-          <Pressable
-            style={styles.calendarShareButton}
-            onPress={() => {
-              Share.share({
-                message: formatPrayerScheduleForSharing(
-                  schedule,
-                  use24HourTime,
-                ),
-              }).catch(() => undefined);
-            }}
-            accessibilityRole="button"
-          >
-            <Text style={styles.calendarShareButtonText}>SHARE THIS DAY</Text>
-          </Pressable>
-        </View>
+        ))}
       </View>
-    </Modal>
+      <PressableScale
+        style={styles.calendarShareButton}
+        onPress={() => {
+          Share.share({
+            message: formatPrayerScheduleForSharing(
+              activeSchedule,
+              use24HourTime,
+            ),
+          }).catch(() => undefined);
+        }}
+        accessibilityRole="button"
+      >
+        <Text style={styles.calendarShareButtonText}>SHARE THIS DAY</Text>
+      </PressableScale>
+    </MotionSheet>
   );
 }
 
@@ -2543,9 +2706,25 @@ function QiblaView({
     relativeAngle !== null && relativeAngle < 0 ? 'LEFT' : 'RIGHT';
   const displayedAngle =
     relativeAngle === null
-      ? qibla?.direction ?? 0
+      ? Math.round(qibla?.direction ?? 0)
       : Math.round(Math.abs(relativeAngle));
   const qiblaAngle = relativeAngle ?? qibla?.direction ?? 0;
+
+  const needleAngle = useSharedValue(qiblaAngle);
+
+  useEffect(() => {
+    const current = needleAngle.value;
+    const delta = ((qiblaAngle - current + 540) % 360) - 180;
+    needleAngle.value = withSpring(current + delta, {
+      damping: 18,
+      stiffness: 90,
+      mass: 1.1,
+    });
+  }, [needleAngle, qiblaAngle]);
+
+  const needleStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${needleAngle.value}deg` }],
+  }));
 
   return (
     <>
@@ -2558,32 +2737,62 @@ function QiblaView({
         </Text>
       </View>
       {qibla ? (
-        <View style={styles.qiblaCard}>
-          <View style={styles.compass}>
-            {relativeAngle !== null ? (
+        <View style={[styles.qiblaCard, isAligned && styles.qiblaCardAligned]}>
+          {relativeAngle !== null ? (
+            <View style={styles.compassPhoneForwardRow}>
+              <PulseDot size={5} color={COLORS.mint} />
               <Text style={styles.compassPhoneForward}>PHONE FORWARD</Text>
-            ) : null}
-            <View
-              style={[
-                styles.qiblaNeedle,
-                { transform: [{ rotate: `${qiblaAngle}deg` }] },
-              ]}
-            >
-              <View style={styles.qiblaNeedleTip} />
-              <View style={styles.qiblaNeedleTail} />
             </View>
+          ) : null}
+          <View
+            style={[styles.compass, isAligned && styles.compassAligned]}
+            accessible={false}
+          >
+            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(index => (
+              <View
+                key={index}
+                style={[
+                  styles.compassTickLayer,
+                  { transform: [{ rotate: `${index * 30}deg` }] },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.compassTick,
+                    index % 3 === 0 && styles.compassTickMajor,
+                  ]}
+                />
+              </View>
+            ))}
+            <Text style={styles.compassCardinalNorth}>N</Text>
+            <Text style={styles.compassCardinalEast}>E</Text>
+            <Text style={styles.compassCardinalSouth}>S</Text>
+            <Text style={styles.compassCardinalWest}>W</Text>
+
+            <Animated.View style={[styles.qiblaNeedle, needleStyle]}>
+              <View
+                style={[
+                  styles.qiblaNeedleTip,
+                  isAligned && styles.qiblaNeedleTipAligned,
+                ]}
+              />
+              <View style={styles.qiblaNeedleTail} />
+            </Animated.View>
             <Image source={appIconAsset} style={styles.qiblaTargetImage} />
             <View style={styles.compassCenter} />
           </View>
-          <Text style={styles.qiblaNumber}>{displayedAngle}°</Text>
-          <Text style={styles.qiblaLabel}>
-            {relativeAngle === null
-              ? 'QIBLA DIRECTION · TRUE-NORTH REFERENCE'
-              : isAligned
-              ? 'QIBLA ALIGNED'
-              : `TURN ${turnDirection}`}
-          </Text>
-          <View style={styles.qiblaRule} />
+
+          <View style={styles.qiblaReadoutRow}>
+            <Text style={styles.qiblaNumber}>{displayedAngle}°</Text>
+            <Text style={styles.qiblaLabel}>
+              {relativeAngle === null
+                ? 'QIBLA DIRECTION · TRUE-NORTH REFERENCE'
+                : isAligned
+                ? 'QIBLA ALIGNED'
+                : `TURN ${turnDirection}`}
+            </Text>
+          </View>
+
           <Text style={styles.qiblaInstruction}>
             {relativeAngle === null
               ? `Face ${Math.round(
@@ -2593,31 +2802,39 @@ function QiblaView({
               ? 'The top of your phone is pointing toward the Qibla.'
               : `Turn your phone ${turnDirection.toLowerCase()} until the arrow points straight ahead.`}
           </Text>
-          <Text style={styles.qiblaLiveStatus}>
-            {relativeAngle === null
-              ? compassError
-                ? 'Compass unavailable — use the Qibla bearing above.'
-                : 'Calibrating Qibla compass…'
-              : `LIVE QIBLA COMPASS · TRUE-NORTH HEADING ${Math.round(
-                  heading?.heading ?? 0,
-                )}°`}
-          </Text>
+
+          <View style={styles.qiblaStatusRow}>
+            <PulseDot
+              size={5}
+              color={isAligned ? COLORS.mintBright : COLORS.muted}
+            />
+            <Text style={styles.qiblaLiveStatus}>
+              {relativeAngle === null
+                ? compassError
+                  ? 'Compass unavailable — use the Qibla bearing above.'
+                  : 'Calibrating Qibla compass…'
+                : `LIVE QIBLA COMPASS · TRUE-NORTH HEADING ${Math.round(
+                    heading?.heading ?? 0,
+                  )}°`}
+            </Text>
+          </View>
+
           <View style={styles.qiblaActions}>
-            <Pressable
+            <PressableScale
               style={styles.qiblaCameraButton}
               onPress={() => setIsCameraFinderOpen(true)}
               accessibilityRole="button"
               accessibilityLabel="Open optional camera Qibla finder"
             >
               <Text style={styles.qiblaCameraButtonText}>USE CAMERA VIEW</Text>
-            </Pressable>
-            <Pressable
+            </PressableScale>
+            <PressableScale
               style={styles.qiblaRefresh}
               onPress={onRefresh}
               accessibilityRole="button"
             >
               <Text style={styles.qiblaRefreshText}>REFRESH DIRECTION</Text>
-            </Pressable>
+            </PressableScale>
           </View>
           <Text style={styles.qiblaCameraHint}>
             Optional — camera access is only requested after you tap camera
@@ -2632,7 +2849,7 @@ function QiblaView({
         </View>
       ) : (
         <View style={styles.resourceCard}>
-          {isLoading ? <ActivityIndicator color={COLORS.mintBright} /> : null}
+          {isLoading ? <ActivityIndicator color={COLORS.mint} /> : null}
           <Text style={styles.resourceTitle}>
             {isLoading
               ? 'Calculating your Qibla bearing'
@@ -2693,82 +2910,94 @@ function DiscoverView({
       </View>
       {isLoading && !discover ? <LoadingState compact /> : null}
       {nextHoliday ? (
-        <View style={styles.occasionCard}>
-          <Text style={styles.occasionLabel}>NEXT HIJRI OCCASION</Text>
-          <Text style={styles.occasionTitle}>
-            {stringValue(holidayHijri?.day) ?? 'Upcoming date'}{' '}
-            {stringValue(holidayMonth?.en) ?? ''}
-          </Text>
-          <Text style={styles.occasionDate}>
-            {stringValue(holidayHijri?.year) ?? 'Hijri calendar'}
-          </Text>
-          <Text style={styles.occasionMark}>☾</Text>
-        </View>
+        <Reveal delay={30}>
+          <View style={styles.occasionCard}>
+            <View style={styles.occasionBody}>
+              <Text style={styles.occasionLabel}>NEXT HIJRI OCCASION</Text>
+              <Text style={styles.occasionTitle} numberOfLines={2}>
+                {stringValue(holidayHijri?.day) ?? 'Upcoming date'}{' '}
+                {stringValue(holidayMonth?.en) ?? ''}
+              </Text>
+              <Text style={styles.occasionDate}>
+                {stringValue(holidayHijri?.year) ?? 'Hijri calendar'}
+              </Text>
+            </View>
+            <Text style={styles.occasionMark}>☾</Text>
+          </View>
+        </Reveal>
       ) : null}
       {nameOfTheDay ? (
-        <View style={styles.nameCard}>
-          <Text style={styles.nameLabel}>A NAME TO REFLECT ON</Text>
-          <Text style={styles.nameArabic}>
-            {stringValue(nameOfTheDay.name) ?? 'ٱللَّٰه'}
-          </Text>
-          <Text style={styles.nameTransliteration}>
-            {stringValue(nameOfTheDay.transliteration) ?? 'Allah'}
-          </Text>
-          <Text style={styles.nameMeaning}>
-            {stringValue(
-              (nameOfTheDay.en as Record<string, unknown> | undefined)?.meaning,
-            ) ?? 'The Most Beautiful Names'}
-          </Text>
-        </View>
+        <Reveal delay={70}>
+          <View style={styles.nameCard}>
+            <Text style={styles.nameLabel}>A NAME TO REFLECT ON</Text>
+            <Text style={styles.nameArabic} numberOfLines={1}>
+              {stringValue(nameOfTheDay.name) ?? 'ٱللَّٰه'}
+            </Text>
+            <Text style={styles.nameTransliteration}>
+              {stringValue(nameOfTheDay.transliteration) ?? 'Allah'}
+            </Text>
+            <Text style={styles.nameMeaning} numberOfLines={2}>
+              {stringValue(
+                (nameOfTheDay.en as Record<string, unknown> | undefined)
+                  ?.meaning,
+              ) ?? 'The Most Beautiful Names'}
+            </Text>
+          </View>
+        </Reveal>
       ) : null}
-      <View style={styles.discoverGrid}>
-        <View style={styles.discoverSmallCard}>
-          <Text style={styles.smallCardNumber}>
-            {monthValues.length || '12'}
-          </Text>
-          <Text style={styles.smallCardLabel}>HIJRI MONTHS</Text>
+      <Reveal delay={110}>
+        <View style={styles.discoverGrid}>
+          <View style={styles.discoverSmallCard}>
+            <Text style={styles.smallCardNumber}>
+              {monthValues.length || '12'}
+            </Text>
+            <Text style={styles.smallCardLabel}>HIJRI MONTHS</Text>
+          </View>
+          <View style={styles.discoverSmallCard}>
+            <Text style={styles.smallCardNumber}>
+              {specialDays.length || '—'}
+            </Text>
+            <Text style={styles.smallCardLabel}>SPECIAL DAYS</Text>
+          </View>
         </View>
-        <View style={styles.discoverSmallCard}>
-          <Text style={styles.smallCardNumber}>
-            {specialDays.length || '—'}
-          </Text>
-          <Text style={styles.smallCardLabel}>SPECIAL DAYS</Text>
-        </View>
-      </View>
+      </Reveal>
 
-      <View style={styles.companionActionsCard}>
-        <Text style={styles.resourceEyebrow}>PRACTICAL COMPANION</Text>
-        <Text style={styles.companionActionsTitle}>
-          Read, then find your way.
-        </Text>
-        <Text style={styles.companionActionsText}>
-          Quran text, translations, recitation and nearby mosque data are loaded
-          only when you choose to use them.
-        </Text>
-        <View style={styles.companionActionRow}>
-          <Pressable
-            style={styles.companionPrimaryAction}
-            onPress={onOpenQuranReader}
-            accessibilityRole="button"
-            accessibilityLabel="Open Quran reader"
-          >
-            <Text style={styles.companionPrimaryActionText}>OPEN QURAN</Text>
-            <Text style={styles.companionActionGlyph}>۞</Text>
-          </Pressable>
-          <Pressable
-            style={styles.companionSecondaryAction}
-            onPress={() => setIsZakatCalculatorOpen(true)}
-            accessibilityRole="button"
-            accessibilityLabel="Open local Zakat calculator"
-          >
-            <Text style={styles.companionSecondaryActionText}>ZAKAT</Text>
-            <Text style={styles.companionActionGlyph}>٪</Text>
-          </Pressable>
+      <Reveal delay={140}>
+        <View style={styles.companionActionsCard}>
+          <Text style={styles.resourceEyebrow}>PRACTICAL COMPANION</Text>
+          <Text style={styles.companionActionsTitle}>
+            Read, then find your way.
+          </Text>
+          <Text style={styles.companionActionsText}>
+            Quran text, translations, recitation and nearby mosque data are
+            loaded only when you choose to use them.
+          </Text>
+          <View style={styles.companionActionRow}>
+            <PressableScale
+              style={styles.companionPrimaryAction}
+              onPress={onOpenQuranReader}
+              accessibilityRole="button"
+              accessibilityLabel="Open Quran reader"
+            >
+              <Text style={styles.companionPrimaryActionText}>OPEN QURAN</Text>
+              <Text style={styles.companionActionGlyph}>۞</Text>
+            </PressableScale>
+            <PressableScale
+              style={styles.companionSecondaryAction}
+              onPress={() => setIsZakatCalculatorOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Open local Zakat calculator"
+            >
+              <Text style={styles.companionSecondaryActionText}>ZAKAT</Text>
+              <Text style={styles.companionActionGlyph}>٪</Text>
+            </PressableScale>
+          </View>
+          <Text style={styles.companionSourceText}>
+            Arabic Quran text: AlQuran.cloud / Islamic Network (Uthmani
+            edition).
+          </Text>
         </View>
-        <Text style={styles.companionSourceText}>
-          Arabic Quran text: AlQuran.cloud / Islamic Network (Uthmani edition).
-        </Text>
-      </View>
+      </Reveal>
 
       <NearbyMosques coordinates={coordinates} />
 
@@ -2792,9 +3021,50 @@ function DiscoverView({
 }
 
 function LoadingState({ compact = false }: { compact?: boolean }) {
+  if (compact) {
+    return (
+      <View style={styles.loadingCompact} accessibilityRole="progressbar">
+        <Skeleton height={10} width="45%" radius={5} />
+        <Skeleton height={10} width="70%" radius={5} />
+      </View>
+    );
+  }
+
   return (
-    <View style={[styles.loadingState, compact && styles.loadingStateCompact]}>
-      <ActivityIndicator color={COLORS.mintBright} size="large" />
+    <View style={styles.loadingState} accessibilityRole="progressbar">
+      <View style={styles.loadingHero}>
+        <Skeleton height={10} width={96} radius={5} />
+        <Skeleton
+          height={40}
+          width="58%"
+          radius={10}
+          style={styles.loadingGap}
+        />
+        <Skeleton
+          height={12}
+          width="38%"
+          radius={6}
+          style={styles.loadingGapSm}
+        />
+        <Skeleton height={5} radius={3} style={styles.loadingGapLg} />
+      </View>
+      <View style={styles.loadingListCard}>
+        {[0, 1, 2, 3].map(row => (
+          <View key={row} style={styles.loadingRow}>
+            <Skeleton height={36} width={36} radius={18} />
+            <View style={styles.loadingRowText}>
+              <Skeleton height={11} width="52%" radius={5} />
+              <Skeleton
+                height={9}
+                width="34%"
+                radius={4}
+                style={styles.loadingGapSm}
+              />
+            </View>
+            <Skeleton height={11} width={56} radius={5} />
+          </View>
+        ))}
+      </View>
       <Text style={styles.loadingText}>Preparing your prayer times</Text>
     </View>
   );
@@ -2821,8 +3091,24 @@ function LocationEmptyState({
 }) {
   return (
     <View style={styles.emptyState}>
-      <View style={styles.emptyMoon}>
-        <View style={styles.emptyMoonCutout} />
+      <View style={styles.emptySky} accessible={false}>
+        {[0, 1, 2, 3, 4].map(index => (
+          <View
+            key={index}
+            style={[
+              styles.emptyStar,
+              {
+                top: [12, 58, 30, 96, 74][index],
+                left: [36, 196, 268, 118, 236][index],
+                opacity: [0.9, 0.5, 0.7, 0.35, 0.6][index],
+              },
+            ]}
+          />
+        ))}
+        <View style={styles.emptyOrbit} />
+        <View style={styles.emptyMoon}>
+          <View style={styles.emptyMoonCutout} />
+        </View>
       </View>
       <Text style={styles.emptyKicker}>WELCOME TO DUAVARA</Text>
       <Text style={styles.emptyTitle}>Prayer time, made personal.</Text>
@@ -2830,20 +3116,20 @@ function LocationEmptyState({
         Allow your location to calculate accurate local times. Prefer privacy?
         Enter coordinates manually instead.
       </Text>
-      <Pressable
-        style={styles.primaryButton}
+      <PressableScale
+        style={[styles.primaryButton, styles.primaryButtonWide]}
         onPress={onUseLocation}
         accessibilityRole="button"
       >
         <Text style={styles.primaryButtonText}>USE MY LOCATION</Text>
-      </Pressable>
-      <Pressable
+      </PressableScale>
+      <PressableScale
         style={styles.secondaryButton}
         onPress={onSettings}
         accessibilityRole="button"
       >
         <Text style={styles.secondaryButtonText}>ENTER COORDINATES</Text>
-      </Pressable>
+      </PressableScale>
     </View>
   );
 }
@@ -2857,28 +3143,109 @@ function BottomTabs({
   insetBottom: number;
   onChange: (tab: Tab) => void;
 }) {
+  const [barWidth, setBarWidth] = useState(0);
+  const activeIndex = TAB_ITEMS.findIndex(tab => tab.id === activeTab);
+  const slotWidth = barWidth > 0 ? (barWidth - 12) / TAB_ITEMS.length : 0;
+  const indicatorX = useSharedValue(0);
+
+  useEffect(() => {
+    indicatorX.value = withSpring(Math.max(activeIndex, 0) * slotWidth, {
+      damping: 22,
+      stiffness: 210,
+      mass: 0.8,
+    });
+  }, [activeIndex, indicatorX, slotWidth]);
+
+  const indicatorStyle = useAnimatedStyle(() => ({
+    width: slotWidth,
+    transform: [{ translateX: indicatorX.value }],
+  }));
+
   return (
-    <View style={[styles.tabBar, { paddingBottom: Math.max(insetBottom, 12) }]}>
-      {TAB_ITEMS.map(tab => {
-        const isActive = tab.id === activeTab;
-        return (
-          <Pressable
-            key={tab.id}
-            style={styles.tabItem}
-            onPress={() => onChange(tab.id)}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: isActive }}
-            accessibilityLabel={tab.label}
-          >
-            <Text style={[styles.tabIcon, isActive && styles.tabIconActive]}>
-              {tab.icon}
-            </Text>
-            <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
-              {tab.label}
-            </Text>
-          </Pressable>
-        );
-      })}
+    <View
+      style={[styles.tabBar, { paddingBottom: Math.max(insetBottom, 10) - 6 }]}
+      onLayout={event => setBarWidth(event.nativeEvent.layout.width)}
+    >
+      <View style={styles.tabBarInner}>
+        {slotWidth > 0 ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.tabIndicator, indicatorStyle]}
+          />
+        ) : null}
+        {TAB_ITEMS.map(tab => {
+          const isActive = tab.id === activeTab;
+          return (
+            <Pressable
+              key={tab.id}
+              style={styles.tabItem}
+              onPress={() => onChange(tab.id)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={tab.label}
+            >
+              <TabIcon id={tab.id} active={isActive} />
+              <Text
+                style={[styles.tabLabel, isActive && styles.tabLabelActive]}
+                numberOfLines={1}
+              >
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function TabIcon({ id, active }: { id: Tab; active: boolean }) {
+  const color = active ? COLORS.inkDeep : COLORS.muted;
+
+  if (id === 'today') {
+    return (
+      <View style={styles.tabGlyph} accessible={false}>
+        <View style={[styles.glyphSun, { borderColor: color }]} />
+        <View style={[styles.glyphHorizon, { backgroundColor: color }]} />
+      </View>
+    );
+  }
+  if (id === 'calendar') {
+    return (
+      <View style={styles.tabGlyph} accessible={false}>
+        <View style={[styles.glyphFrame, { borderColor: color }]}>
+          <View style={[styles.glyphFrameDot, { backgroundColor: color }]} />
+        </View>
+        <View style={[styles.glyphFrameTick, { backgroundColor: color }]} />
+      </View>
+    );
+  }
+  if (id === 'qibla') {
+    return (
+      <View style={styles.tabGlyph} accessible={false}>
+        <View style={[styles.glyphCompass, { borderColor: color }]}>
+          <View
+            style={[styles.glyphCompassNeedle, { backgroundColor: color }]}
+          />
+        </View>
+        <View style={[styles.glyphCompassTop, { backgroundColor: color }]} />
+      </View>
+    );
+  }
+  if (id === 'discover') {
+    return (
+      <View style={styles.tabGlyph} accessible={false}>
+        <View style={[styles.glyphDiamond, { backgroundColor: color }]} />
+        <View style={[styles.glyphDiamondDot, { backgroundColor: color }]} />
+      </View>
+    );
+  }
+  return (
+    <View style={styles.tabGlyph} accessible={false}>
+      <View style={[styles.glyphInfoRing, { borderColor: color }]}>
+        <View style={[styles.glyphInfoDot, { backgroundColor: color }]} />
+        <View style={[styles.glyphInfoStem, { backgroundColor: color }]} />
+      </View>
     </View>
   );
 }
@@ -3064,863 +3431,832 @@ function SettingsSheet({
   };
 
   return (
-    <Modal
+    <MotionSheet
       visible={isVisible}
-      transparent
-      animationType="slide"
       onRequestClose={handleSettingsRequestClose}
+      style={styles.settingsSheet}
     >
-      <View style={styles.modalBackdrop}>
-        <Pressable
-          style={styles.modalDismissArea}
-          onPress={handleSettingsRequestClose}
-        />
-        <View style={styles.settingsSheet}>
-          <View style={styles.sheetHandle} />
-          {isMethodPickerOpen ? (
-            <>
-              <View style={styles.sheetHeader}>
-                <Pressable
-                  style={styles.methodPickerBackButton}
-                  onPress={() => setIsMethodPickerOpen(false)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Back to prayer settings"
-                >
-                  <Text style={styles.methodPickerBackText}>‹ BACK</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.closeButton}
-                  onPress={closeSettings}
-                  accessibilityRole="button"
-                  accessibilityLabel="Close prayer settings"
-                >
-                  <Text style={styles.closeText}>×</Text>
-                </Pressable>
-              </View>
-              <View style={styles.methodPickerHeading}>
-                <Text style={styles.sheetKicker}>PRAYER TIMES</Text>
-                <Text style={styles.sheetTitle}>Calculation method</Text>
-                <Text style={styles.settingsHint}>
-                  Automatic lets AlAdhan choose the closest supported authority
-                  for this place. Choose your local community&apos;s method to
-                  override it.
-                </Text>
-                {message ? (
-                  <Text
-                    style={styles.settingsInlineMessage}
-                    accessibilityRole="alert"
-                  >
-                    {message}
-                  </Text>
-                ) : null}
-              </View>
-              <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.methodPickerList}
+      <View style={styles.sheetHandle} />
+      {isMethodPickerOpen ? (
+        <>
+          <View style={styles.sheetHeader}>
+            <Pressable
+              style={styles.methodPickerBackButton}
+              onPress={() => setIsMethodPickerOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Back to prayer settings"
+            >
+              <Text style={styles.methodPickerBackText}>‹ BACK</Text>
+            </Pressable>
+            <Pressable
+              style={styles.closeButton}
+              onPress={closeSettings}
+              accessibilityRole="button"
+              accessibilityLabel="Close prayer settings"
+            >
+              <Text style={styles.closeText}>×</Text>
+            </Pressable>
+          </View>
+          <View style={styles.methodPickerHeading}>
+            <Text style={styles.sheetKicker}>PRAYER TIMES</Text>
+            <Text style={styles.sheetTitle}>Calculation method</Text>
+            <Text style={styles.settingsHint}>
+              Automatic lets AlAdhan choose the closest supported authority for
+              this place. Choose your local community&apos;s method to override
+              it.
+            </Text>
+            {message ? (
+              <Text
+                style={styles.settingsInlineMessage}
+                accessibilityRole="alert"
               >
-                {methodOptions.map(method => {
-                  const isSelected = method.id === settings.method;
-                  return (
-                    <Pressable
-                      key={method.id ?? 'automatic'}
-                      style={[
-                        styles.methodPickerOption,
-                        isSelected && styles.methodPickerOptionSelected,
-                      ]}
-                      onPress={() => {
-                        const saveMethod = onMethod(method.id);
-                        setIsMethodPickerOpen(false);
-                        return saveMethod;
-                      }}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected: isSelected }}
-                      accessibilityLabel={method.name}
-                    >
-                      <Text
-                        style={[
-                          styles.methodPickerOptionText,
-                          isSelected && styles.methodPickerOptionTextSelected,
-                        ]}
-                      >
-                        {method.name}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.methodPickerCheck,
-                          !isSelected && styles.methodPickerCheckHidden,
-                        ]}
-                      >
-                        ✓
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            </>
-          ) : (
-            <>
-              <View style={styles.sheetHeader}>
-                <View>
-                  <Text style={styles.sheetKicker}>YOUR PREFERENCES</Text>
-                  <Text style={styles.sheetTitle}>Prayer settings</Text>
-                </View>
+                {message}
+              </Text>
+            ) : null}
+          </View>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.methodPickerList}
+          >
+            {methodOptions.map(method => {
+              const isSelected = method.id === settings.method;
+              return (
                 <Pressable
-                  style={styles.closeButton}
-                  onPress={closeSettings}
-                  accessibilityRole="button"
-                  accessibilityLabel="Close prayer settings"
-                  accessibilityHint="Closes the prayer settings panel"
-                >
-                  <Text style={styles.closeText}>×</Text>
-                </Pressable>
-              </View>
-              <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.sheetScrollContent}
-              >
-                {message ? (
-                  <Text
-                    style={styles.settingsInlineMessage}
-                    accessibilityRole="alert"
-                  >
-                    {message}
-                  </Text>
-                ) : null}
-                <Text style={styles.settingsLabel}>SAVED PLACES</Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.methodScroller}
-                >
-                  {profiles.map(profile => {
-                    const selected = profile.id === activeProfileId;
-                    return (
-                      <Pressable
-                        key={profile.id}
-                        style={[
-                          styles.methodChip,
-                          selected && styles.methodChipSelected,
-                        ]}
-                        onPress={() => onSelectProfile(profile.id)}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected }}
-                        accessibilityLabel={`Use ${profile.name} saved place`}
-                      >
-                        <Text
-                          style={[
-                            styles.methodChipText,
-                            selected && styles.methodChipTextSelected,
-                          ]}
-                        >
-                          {profile.name}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                  <Pressable
-                    style={styles.newProfileChip}
-                    onPress={onNewProfile}
-                    accessibilityRole="button"
-                    accessibilityLabel="Add a saved place"
-                  >
-                    <Text style={styles.newProfileChipText}>+ ADD PLACE</Text>
-                  </Pressable>
-                </ScrollView>
-                <Text style={styles.settingsHint}>
-                  Keep Home, Work, Mosque, Travel and custom places with their
-                  own local calculation adjustments and cached schedules.
-                </Text>
-
-                <Text style={styles.settingsLabel}>CALCULATION METHOD</Text>
-                <Pressable
-                  style={styles.methodPickerTrigger}
-                  onPress={() => setIsMethodPickerOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Choose calculation method"
-                  accessibilityHint="Opens the list of prayer-time calculation methods"
-                >
-                  <View style={styles.methodPickerTriggerText}>
-                    <Text style={styles.methodPickerTriggerLabel}>
-                      CURRENT METHOD
-                    </Text>
-                    <Text
-                      style={styles.methodPickerTriggerValue}
-                      numberOfLines={1}
-                    >
-                      {selectedMethod?.name ??
-                        (settings.method === null
-                          ? automaticMethod.name
-                          : `Method ${settings.method}`)}
-                    </Text>
-                  </View>
-                  <Text style={styles.methodPickerChevron}>›</Text>
-                </Pressable>
-                <Text style={styles.settingsHint}>
-                  Automatic uses this place&apos;s coordinates to select
-                  AlAdhan&apos;s closest supported authority. Use a manual
-                  method when your mosque or community follows a specific
-                  timetable.
-                </Text>
-
-                <Text style={styles.settingsLabel}>ASR JURISTIC METHOD</Text>
-                <View style={styles.segmentedControl}>
-                  {(['standard', 'hanafi'] as const).map(school => (
-                    <Pressable
-                      key={school}
-                      style={[
-                        styles.segment,
-                        settings.school === school && styles.segmentSelected,
-                      ]}
-                      onPress={() => onSchool(school)}
-                    >
-                      <Text
-                        style={[
-                          styles.segmentText,
-                          settings.school === school &&
-                            styles.segmentTextSelected,
-                        ]}
-                      >
-                        {school === 'standard' ? 'Standard' : 'Hanafi'}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-
-                <Text style={styles.settingsLabel}>HIGH-LATITUDE RULE</Text>
-                <View style={styles.profileOptionRow}>
-                  {(
-                    [
-                      ['default', 'API default'],
-                      ['angleBased', 'Angle'],
-                      ['midnight', 'Midnight'],
-                      ['oneSeventh', '1/7 night'],
-                    ] as const
-                  ).map(([rule, label]) => {
-                    const selected = highLatitudeRule === rule;
-                    return (
-                      <Pressable
-                        key={rule}
-                        style={[
-                          styles.profileOption,
-                          selected && styles.profileOptionSelected,
-                        ]}
-                        onPress={() => onHighLatitudeRule(rule)}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected }}
-                      >
-                        <Text
-                          style={[
-                            styles.profileOptionText,
-                            selected && styles.profileOptionTextSelected,
-                          ]}
-                        >
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <Text style={styles.settingsHint}>
-                  Use your local mosque’s guidance. API default is preserved
-                  unless you choose an override.
-                </Text>
-
-                <Text style={styles.settingsLabel}>FASTING ROUTINE</Text>
-                <View style={styles.segmentedControl}>
-                  {(
-                    [
-                      ['off', 'Off'],
-                      ['mondayThursday', 'Mon & Thu'],
-                      ['dawud', 'Dawud'],
-                    ] as const
-                  ).map(([routine, label]) => (
-                    <Pressable
-                      key={routine}
-                      style={[
-                        styles.segment,
-                        settings.fastingRoutine === routine &&
-                          styles.segmentSelected,
-                      ]}
-                      onPress={() => onFastingRoutine(routine)}
-                    >
-                      <Text
-                        style={[
-                          styles.segmentText,
-                          settings.fastingRoutine === routine &&
-                            styles.segmentTextSelected,
-                        ]}
-                      >
-                        {label}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <Text style={styles.settingsHint}>
-                  {settings.fastingRoutine === 'dawud'
-                    ? settings.dawudAnchorDate
-                      ? `Anchor ${settings.dawudAnchorDate} is a fasting day. Dawud fasting alternates every other day.`
-                      : 'Set the date that is a fasting day to begin your Dawud cycle.'
-                    : settings.fastingRoutine === 'off'
-                    ? 'Choose Mon & Thu or Dawud above to enable fasting alarms.'
-                    : 'Schedules Suhoor and Imsak for your chosen fasting days.'}
-                </Text>
-                {settings.fastingRoutine === 'dawud' ? (
-                  <View style={styles.dawudAnchorCard}>
-                    <Text style={styles.dawudAnchorTitle}>
-                      DAWUD FASTING ANCHOR
-                    </Text>
-                    <Text style={styles.dawudAnchorHint}>
-                      This date is a fasting day. The cycle alternates every
-                      other day from it.
-                    </Text>
-                    <View style={styles.dawudAnchorRow}>
-                      <View style={styles.dawudAnchorFieldYear}>
-                        <Text style={styles.dawudAnchorLabel}>YEAR</Text>
-                        <TextInput
-                          value={dawudAnchorYear}
-                          onChangeText={value => {
-                            if (isUnsignedIntegerInput(value)) {
-                              setDawudAnchorYear(value);
-                              setDawudAnchorError(null);
-                            }
-                          }}
-                          keyboardType="numeric"
-                          maxLength={4}
-                          placeholder="2026"
-                          placeholderTextColor="#8C9A8F"
-                          style={styles.dawudAnchorInput}
-                          accessibilityLabel="Dawud fasting anchor year"
-                        />
-                      </View>
-                      <View style={styles.dawudAnchorField}>
-                        <Text style={styles.dawudAnchorLabel}>MONTH</Text>
-                        <TextInput
-                          value={dawudAnchorMonth}
-                          onChangeText={value => {
-                            if (isUnsignedIntegerInput(value)) {
-                              setDawudAnchorMonth(value);
-                              setDawudAnchorError(null);
-                            }
-                          }}
-                          keyboardType="numeric"
-                          maxLength={2}
-                          placeholder="08"
-                          placeholderTextColor="#8C9A8F"
-                          style={styles.dawudAnchorInput}
-                          accessibilityLabel="Dawud fasting anchor month"
-                        />
-                      </View>
-                      <View style={styles.dawudAnchorField}>
-                        <Text style={styles.dawudAnchorLabel}>DAY</Text>
-                        <TextInput
-                          value={dawudAnchorDay}
-                          onChangeText={value => {
-                            if (isUnsignedIntegerInput(value)) {
-                              setDawudAnchorDay(value);
-                              setDawudAnchorError(null);
-                            }
-                          }}
-                          keyboardType="numeric"
-                          maxLength={2}
-                          placeholder="31"
-                          placeholderTextColor="#8C9A8F"
-                          style={styles.dawudAnchorInput}
-                          accessibilityLabel="Dawud fasting anchor day"
-                        />
-                      </View>
-                    </View>
-                    <Pressable
-                      style={styles.dawudAnchorSaveButton}
-                      onPress={saveDawudAnchorDate}
-                      accessibilityRole="button"
-                      accessibilityLabel="Save Dawud fasting anchor date"
-                      accessibilityHint="Sets this date as a fasting day and updates fasting alarms."
-                    >
-                      <Text style={styles.dawudAnchorSaveText}>
-                        SAVE ANCHOR DATE
-                      </Text>
-                    </Pressable>
-                    {dawudAnchorError ? (
-                      <Text
-                        style={styles.dawudAnchorError}
-                        accessibilityRole="alert"
-                      >
-                        {dawudAnchorError}
-                      </Text>
-                    ) : null}
-                  </View>
-                ) : null}
-
-                <View style={styles.toggleRow}>
-                  <View style={styles.toggleTextBlock}>
-                    <Text style={styles.toggleTitle}>Fasting alarms</Text>
-                    <Text style={styles.toggleDescription}>
-                      Suhoor reminder 30 minutes before Imsak, plus Imsak alarm.
-                    </Text>
-                  </View>
-                  <Switch
-                    value={settings.fastingAlarmsEnabled}
-                    onValueChange={onFastingAlarms}
-                    accessibilityLabel="Fasting alarms"
-                    accessibilityHint="Schedules Suhoor and Imsak alerts"
-                    accessibilityRole="switch"
-                    disabled={
-                      settings.fastingRoutine === 'off' ||
-                      !nativeNotificationsAvailable
-                    }
-                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                    thumbColor={COLORS.cream}
-                  />
-                </View>
-                {settings.fastingAlarmsEnabled &&
-                settings.fastingRoutine !== 'off' ? (
-                  <View style={styles.prayerToggleGroup}>
-                    <View style={styles.prayerToggleRow}>
-                      <Text style={styles.prayerToggleLabel}>
-                        Suhoor reminder
-                      </Text>
-                      <Switch
-                        value={settings.suhoorReminderEnabled}
-                        onValueChange={onSuhoorReminder}
-                        accessibilityLabel="Suhoor reminder"
-                        accessibilityHint="Schedules a reminder before Imsak"
-                        accessibilityRole="switch"
-                        trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                        thumbColor={COLORS.cream}
-                      />
-                    </View>
-                    <View style={styles.prayerToggleRow}>
-                      <Text style={styles.prayerToggleLabel}>Imsak alarm</Text>
-                      <Switch
-                        value={settings.imsakAlarmEnabled}
-                        onValueChange={onImsakAlarm}
-                        accessibilityLabel="Imsak alarm"
-                        accessibilityHint="Schedules an alarm at Imsak"
-                        accessibilityRole="switch"
-                        trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                        thumbColor={COLORS.cream}
-                      />
-                    </View>
-                  </View>
-                ) : null}
-
-                <View style={styles.toggleRow}>
-                  <View style={styles.toggleTextBlock}>
-                    <Text style={styles.toggleTitle}>24-hour time</Text>
-                    <Text style={styles.toggleDescription}>
-                      Display prayer and calendar times as 05:30 instead of 5:30
-                      AM.
-                    </Text>
-                  </View>
-                  <Switch
-                    value={settings.use24HourTime}
-                    onValueChange={onUse24HourTime}
-                    accessibilityLabel="24-hour time"
-                    accessibilityHint="Displays times using the 24-hour clock"
-                    accessibilityRole="switch"
-                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                    thumbColor={COLORS.cream}
-                  />
-                </View>
-
-                <View style={styles.toggleRow}>
-                  <View style={styles.toggleTextBlock}>
-                    <Text style={styles.toggleTitle}>Prayer reminders</Text>
-                    <Text style={styles.toggleDescription}>
-                      Native alerts for the next seven days.
-                    </Text>
-                  </View>
-                  <Switch
-                    value={settings.notificationsEnabled}
-                    onValueChange={onNotifications}
-                    disabled={!nativeNotificationsAvailable}
-                    accessibilityLabel="Prayer reminders"
-                    accessibilityHint="Schedules native prayer alerts"
-                    accessibilityRole="switch"
-                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                    thumbColor={COLORS.cream}
-                  />
-                </View>
-                {settings.notificationsEnabled ? (
-                  <>
-                    <View style={styles.toggleRow}>
-                      <View style={styles.toggleTextBlock}>
-                        <Text style={styles.toggleTitle}>Adhan sound</Text>
-                        <Text style={styles.toggleDescription}>
-                          Uses a bundled 28-second Adhan clip for prayer alerts.
-                          Fasting alarms keep the system sound.
-                        </Text>
-                      </View>
-                      <Switch
-                        value={settings.adhanEnabled}
-                        onValueChange={onAdhanEnabled}
-                        accessibilityLabel="Adhan sound"
-                        accessibilityHint="Uses Adhan audio for prayer alerts"
-                        accessibilityRole="switch"
-                        trackColor={{ false: COLORS.sand, true: COLORS.moss }}
-                        thumbColor={COLORS.cream}
-                      />
-                    </View>
-                    <Text style={styles.adhanVolumeLabel}>
-                      ADHAN VOLUME ROUTE
-                    </Text>
-                    <View style={styles.adhanVolumeSelector}>
-                      {(
-                        [
-                          ['alarm', 'Alarm'],
-                          ['media', 'Media'],
-                          ['notification', 'Notification'],
-                        ] as const
-                      ).map(([category, label]) => {
-                        const isSelected =
-                          settings.adhanVolumeCategory === category;
-                        return (
-                          <Pressable
-                            key={category}
-                            style={[
-                              styles.adhanVolumeButton,
-                              isSelected && styles.adhanVolumeButtonSelected,
-                            ]}
-                            onPress={() => onAdhanVolumeCategory(category)}
-                            accessibilityRole="radio"
-                            accessibilityState={{ selected: isSelected }}
-                            accessibilityLabel={`${label} volume route`}
-                          >
-                            <Text
-                              style={[
-                                styles.adhanVolumeButtonText,
-                                isSelected &&
-                                  styles.adhanVolumeButtonTextSelected,
-                              ]}
-                            >
-                              {label}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                    <Text style={styles.adhanVolumeHint}>
-                      Android follows this system volume. iPhone uses its
-                      standard notification audio route.
-                    </Text>
-                    <View style={styles.adhanPreviewRow}>
-                      <Pressable
-                        style={styles.adhanPreviewButton}
-                        onPress={toggleAdhanPreview}
-                        accessibilityRole="button"
-                        accessibilityLabel={
-                          isAdhanPreviewPlaying
-                            ? 'Stop full Adhan preview'
-                            : 'Play full Adhan preview'
-                        }
-                      >
-                        <Text style={styles.adhanPreviewText}>
-                          {isAdhanPreviewPlaying
-                            ? 'STOP FULL PREVIEW'
-                            : 'PLAY FULL PREVIEW'}
-                        </Text>
-                      </Pressable>
-                      <Text style={styles.adhanLicenseText}>
-                        CC0 recording · source in Third Party Notices
-                      </Text>
-                    </View>
-                    {adhanPreviewError ? (
-                      <Text
-                        style={styles.adhanPreviewError}
-                        accessibilityRole="alert"
-                      >
-                        {adhanPreviewError}
-                      </Text>
-                    ) : null}
-                    <View style={styles.prayerToggleGroup}>
-                      {PRAYER_NAMES.map(prayer => (
-                        <View style={styles.prayerToggleRow} key={prayer}>
-                          <Text style={styles.prayerToggleLabel}>{prayer}</Text>
-                          <Switch
-                            value={settings.enabledPrayers[prayer]}
-                            onValueChange={enabled =>
-                              onPrayerReminder(prayer, enabled)
-                            }
-                            accessibilityLabel={`${prayer} reminder`}
-                            accessibilityHint={`Schedules ${prayer} prayer alerts`}
-                            accessibilityRole="switch"
-                            trackColor={{
-                              false: COLORS.sand,
-                              true: COLORS.moss,
-                            }}
-                            thumbColor={COLORS.cream}
-                          />
-                        </View>
-                      ))}
-                    </View>
-                  </>
-                ) : null}
-
-                <Text style={styles.settingsLabel}>NOTIFICATION HEALTH</Text>
-                <View
-                  style={styles.healthCard}
-                  accessibilityLiveRegion="polite"
-                >
-                  <HealthRow
-                    label="Notifications"
-                    value={notificationHealthLabel(health.notifications)}
-                  />
-                  {health.timing !== 'notApplicable' ? (
-                    <HealthRow
-                      label="Timing"
-                      value={notificationHealthLabel(health.timing)}
-                    />
-                  ) : null}
-                  {health.batteryOptimization !== 'notApplicable' ? (
-                    <HealthRow
-                      label="Battery"
-                      value={notificationHealthLabel(
-                        health.batteryOptimization,
-                      )}
-                    />
-                  ) : null}
-                  {health.bootRescheduling === 'supported' ? (
-                    <HealthRow
-                      label="After restart"
-                      value="Reschedules reminders"
-                    />
-                  ) : null}
-                  {!nativeNotificationsAvailable ? (
-                    <Text
-                      style={styles.nativeReminderUnavailable}
-                      accessibilityRole="alert"
-                    >
-                      Reminders require the latest Duavara app build. Reinstall
-                      the current APK, then reopen these settings to allow
-                      notifications.
-                    </Text>
-                  ) : null}
-                  <Text style={styles.healthHint}>
-                    Focus, Do Not Disturb, and system notification settings can
-                    still delay alerts.
-                  </Text>
-                  <View style={styles.healthActions}>
-                    <Pressable
-                      style={styles.healthButton}
-                      onPress={onRefreshNotificationHealth}
-                      accessibilityRole="button"
-                      accessibilityLabel="Refresh notification health"
-                    >
-                      <Text style={styles.healthButtonText}>
-                        REFRESH STATUS
-                      </Text>
-                    </Pressable>
-                    {health.timing === 'approximate' ? (
-                      <Pressable
-                        style={styles.healthButton}
-                        onPress={onOpenExactAlarmSettings}
-                        accessibilityRole="button"
-                        accessibilityLabel="Open exact alarm settings"
-                      >
-                        <Text style={styles.healthButtonText}>
-                          ALLOW EXACT TIME
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                    {health.batteryOptimization === 'restricted' ? (
-                      <Pressable
-                        style={styles.healthButton}
-                        onPress={onOpenBatterySettings}
-                        accessibilityRole="button"
-                        accessibilityLabel="Open battery optimization settings"
-                      >
-                        <Text style={styles.healthButtonText}>
-                          BATTERY SETTINGS
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                    {health.notifications === 'blocked' ? (
-                      <Pressable
-                        style={styles.healthButton}
-                        onPress={onOpenSystemSettings}
-                        accessibilityRole="button"
-                        accessibilityLabel="Open system notification settings"
-                      >
-                        <Text style={styles.healthButtonText}>
-                          SYSTEM SETTINGS
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                </View>
-
-                <Text style={styles.settingsLabel}>SAVED PLACE DETAILS</Text>
-                <Text style={styles.settingsHint}>
-                  Each place keeps its own coordinates, optional timezone,
-                  high-latitude rule, minute adjustments, and 30-day offline
-                  timetable.
-                </Text>
-                <TextInput
-                  value={profileNameValue}
-                  onChangeText={onProfileName}
-                  placeholder="Place name, e.g. Home"
-                  placeholderTextColor="#8C9A8F"
-                  style={styles.profileTextInput}
-                  maxLength={40}
-                  accessibilityLabel="Saved place name"
-                />
-                <View style={styles.profileOptionRow}>
-                  {(
-                    [
-                      ['home', 'Home'],
-                      ['work', 'Work'],
-                      ['mosque', 'Mosque'],
-                      ['travel', 'Travel'],
-                      ['custom', 'Custom'],
-                    ] as const
-                  ).map(([kind, label]) => {
-                    const selected = profileKindValue === kind;
-                    return (
-                      <Pressable
-                        key={kind}
-                        style={[
-                          styles.profileOption,
-                          selected && styles.profileOptionSelected,
-                        ]}
-                        onPress={() => onProfileKind(kind)}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected }}
-                        accessibilityLabel={`${label} place type`}
-                      >
-                        <Text
-                          style={[
-                            styles.profileOptionText,
-                            selected && styles.profileOptionTextSelected,
-                          ]}
-                        >
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <Text style={styles.settingsLabel}>MANUAL COORDINATES</Text>
-                <Text style={styles.settingsHint}>
-                  Enter coordinates manually to update this saved place.
-                </Text>
-                <View style={styles.coordinateRow}>
-                  <View style={styles.coordinateField}>
-                    <Text style={styles.coordinateLabel}>LATITUDE</Text>
-                    <TextInput
-                      value={latitude}
-                      onChangeText={value => {
-                        if (isSignedDecimalInput(value)) onLatitude(value);
-                      }}
-                      keyboardType={
-                        Platform.OS === 'android'
-                          ? 'numeric'
-                          : 'numbers-and-punctuation'
-                      }
-                      placeholder="e.g. 51.5074"
-                      placeholderTextColor="#8C9A8F"
-                      style={styles.coordinateInput}
-                      accessibilityLabel="Latitude"
-                    />
-                  </View>
-                  <View style={styles.coordinateField}>
-                    <Text style={styles.coordinateLabel}>LONGITUDE</Text>
-                    <TextInput
-                      value={longitude}
-                      onChangeText={value => {
-                        if (isSignedDecimalInput(value)) onLongitude(value);
-                      }}
-                      keyboardType={
-                        Platform.OS === 'android'
-                          ? 'numeric'
-                          : 'numbers-and-punctuation'
-                      }
-                      placeholder="e.g. -0.1278"
-                      placeholderTextColor="#8C9A8F"
-                      style={styles.coordinateInput}
-                      accessibilityLabel="Longitude"
-                    />
-                  </View>
-                </View>
-                <Text style={styles.coordinateLabel}>
-                  TIMEZONE OVERRIDE (OPTIONAL)
-                </Text>
-                <TextInput
-                  value={timezoneValue}
-                  onChangeText={onTimezone}
-                  autoCapitalize="none"
-                  placeholder="e.g. Europe/London"
-                  placeholderTextColor="#8C9A8F"
-                  style={styles.profileTextInput}
-                  accessibilityLabel="IANA timezone override"
-                />
-                <Text style={styles.settingsLabel}>
-                  LOCAL MINUTE ADJUSTMENTS
-                </Text>
-                <Text style={styles.settingsHint}>
-                  Use only when your local masjid timetable differs. Set 0 to
-                  keep the API time.
-                </Text>
-                <View style={styles.adjustmentRow}>
-                  {PRAYER_NAMES.map(prayer => (
-                    <View key={prayer} style={styles.adjustmentField}>
-                      <Text style={styles.adjustmentLabel}>{prayer}</Text>
-                      <TextInput
-                        value={profileAdjustments[prayer]}
-                        onChangeText={value => {
-                          if (isSignedIntegerInput(value))
-                            onAdjustment(prayer, value);
-                        }}
-                        keyboardType={
-                          Platform.OS === 'android'
-                            ? 'numeric'
-                            : 'numbers-and-punctuation'
-                        }
-                        style={styles.adjustmentInput}
-                        accessibilityLabel={`${prayer} minute adjustment`}
-                      />
-                    </View>
-                  ))}
-                </View>
-                <Pressable
+                  key={method.id ?? 'automatic'}
                   style={[
-                    styles.saveLocationButton,
-                    isBusy && styles.saveLocationButtonDisabled,
+                    styles.methodPickerOption,
+                    isSelected && styles.methodPickerOptionSelected,
                   ]}
-                  onPress={onSaveLocation}
-                  disabled={isBusy}
-                  accessibilityRole="button"
-                  accessibilityLabel="Save place and update prayer times"
+                  onPress={() => {
+                    const saveMethod = onMethod(method.id);
+                    setIsMethodPickerOpen(false);
+                    return saveMethod;
+                  }}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: isSelected }}
+                  accessibilityLabel={method.name}
                 >
-                  <Text style={styles.saveLocationText}>
-                    {isBusy
-                      ? 'UPDATING…'
-                      : 'SAVE MANUAL COORDINATES & UPDATE TIMES'}
+                  <Text
+                    style={[
+                      styles.methodPickerOptionText,
+                      isSelected && styles.methodPickerOptionTextSelected,
+                    ]}
+                  >
+                    {method.name}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.methodPickerCheck,
+                      !isSelected && styles.methodPickerCheckHidden,
+                    ]}
+                  >
+                    ✓
                   </Text>
                 </Pressable>
+              );
+            })}
+          </ScrollView>
+        </>
+      ) : (
+        <>
+          <View style={styles.sheetHeader}>
+            <View>
+              <Text style={styles.sheetKicker}>YOUR PREFERENCES</Text>
+              <Text style={styles.sheetTitle}>Prayer settings</Text>
+            </View>
+            <Pressable
+              style={styles.closeButton}
+              onPress={closeSettings}
+              accessibilityRole="button"
+              accessibilityLabel="Close prayer settings"
+              accessibilityHint="Closes the prayer settings panel"
+            >
+              <Text style={styles.closeText}>×</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.sheetScrollContent}
+          >
+            {message ? (
+              <Text
+                style={styles.settingsInlineMessage}
+                accessibilityRole="alert"
+              >
+                {message}
+              </Text>
+            ) : null}
+            <Text style={styles.settingsLabel}>SAVED PLACES</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.methodScroller}
+            >
+              {profiles.map(profile => {
+                const selected = profile.id === activeProfileId;
+                return (
+                  <Pressable
+                    key={profile.id}
+                    style={[
+                      styles.methodChip,
+                      selected && styles.methodChipSelected,
+                    ]}
+                    onPress={() => onSelectProfile(profile.id)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`Use ${profile.name} saved place`}
+                  >
+                    <Text
+                      style={[
+                        styles.methodChipText,
+                        selected && styles.methodChipTextSelected,
+                      ]}
+                    >
+                      {profile.name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+              <Pressable
+                style={styles.newProfileChip}
+                onPress={onNewProfile}
+                accessibilityRole="button"
+                accessibilityLabel="Add a saved place"
+              >
+                <Text style={styles.newProfileChipText}>+ ADD PLACE</Text>
+              </Pressable>
+            </ScrollView>
+            <Text style={styles.settingsHint}>
+              Keep Home, Work, Mosque, Travel and custom places with their own
+              local calculation adjustments and cached schedules.
+            </Text>
 
-                <Text style={styles.settingsLabel}>PRIVACY</Text>
-                <Text style={styles.settingsHint}>
-                  Delete all locally stored app data, including saved places,
-                  prayer caches, worship progress, Quran downloads, mosque
-                  notes, Zakat data, and scheduled reminders.
+            <Text style={styles.settingsLabel}>CALCULATION METHOD</Text>
+            <Pressable
+              style={styles.methodPickerTrigger}
+              onPress={() => setIsMethodPickerOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Choose calculation method"
+              accessibilityHint="Opens the list of prayer-time calculation methods"
+            >
+              <View style={styles.methodPickerTriggerText}>
+                <Text style={styles.methodPickerTriggerLabel}>
+                  CURRENT METHOD
                 </Text>
+                <Text style={styles.methodPickerTriggerValue} numberOfLines={1}>
+                  {selectedMethod?.name ??
+                    (settings.method === null
+                      ? automaticMethod.name
+                      : `Method ${settings.method}`)}
+                </Text>
+              </View>
+              <Text style={styles.methodPickerChevron}>›</Text>
+            </Pressable>
+            <Text style={styles.settingsHint}>
+              Automatic uses this place&apos;s coordinates to select
+              AlAdhan&apos;s closest supported authority. Use a manual method
+              when your mosque or community follows a specific timetable.
+            </Text>
+
+            <Text style={styles.settingsLabel}>ASR JURISTIC METHOD</Text>
+            <View style={styles.segmentedControl}>
+              {(['standard', 'hanafi'] as const).map(school => (
                 <Pressable
-                  style={styles.deleteDataButton}
-                  onPress={onDeleteAllData}
-                  disabled={isBusy}
-                  accessibilityRole="button"
-                  accessibilityLabel="Delete all local data"
+                  key={school}
+                  style={[
+                    styles.segment,
+                    settings.school === school && styles.segmentSelected,
+                  ]}
+                  onPress={() => onSchool(school)}
                 >
-                  <Text style={styles.deleteDataButtonText}>
-                    DELETE ALL LOCAL DATA
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      settings.school === school && styles.segmentTextSelected,
+                    ]}
+                  >
+                    {school === 'standard' ? 'Standard' : 'Hanafi'}
                   </Text>
                 </Pressable>
-              </ScrollView>
-            </>
-          )}
-        </View>
-      </View>
-    </Modal>
+              ))}
+            </View>
+
+            <Text style={styles.settingsLabel}>HIGH-LATITUDE RULE</Text>
+            <View style={styles.profileOptionRow}>
+              {(
+                [
+                  ['default', 'API default'],
+                  ['angleBased', 'Angle'],
+                  ['midnight', 'Midnight'],
+                  ['oneSeventh', '1/7 night'],
+                ] as const
+              ).map(([rule, label]) => {
+                const selected = highLatitudeRule === rule;
+                return (
+                  <Pressable
+                    key={rule}
+                    style={[
+                      styles.profileOption,
+                      selected && styles.profileOptionSelected,
+                    ]}
+                    onPress={() => onHighLatitudeRule(rule)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                  >
+                    <Text
+                      style={[
+                        styles.profileOptionText,
+                        selected && styles.profileOptionTextSelected,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.settingsHint}>
+              Use your local mosque’s guidance. API default is preserved unless
+              you choose an override.
+            </Text>
+
+            <Text style={styles.settingsLabel}>FASTING ROUTINE</Text>
+            <View style={styles.segmentedControl}>
+              {(
+                [
+                  ['off', 'Off'],
+                  ['mondayThursday', 'Mon & Thu'],
+                  ['dawud', 'Dawud'],
+                ] as const
+              ).map(([routine, label]) => (
+                <Pressable
+                  key={routine}
+                  style={[
+                    styles.segment,
+                    settings.fastingRoutine === routine &&
+                      styles.segmentSelected,
+                  ]}
+                  onPress={() => onFastingRoutine(routine)}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      settings.fastingRoutine === routine &&
+                        styles.segmentTextSelected,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={styles.settingsHint}>
+              {settings.fastingRoutine === 'dawud'
+                ? settings.dawudAnchorDate
+                  ? `Anchor ${settings.dawudAnchorDate} is a fasting day. Dawud fasting alternates every other day.`
+                  : 'Set the date that is a fasting day to begin your Dawud cycle.'
+                : settings.fastingRoutine === 'off'
+                ? 'Choose Mon & Thu or Dawud above to enable fasting alarms.'
+                : 'Schedules Suhoor and Imsak for your chosen fasting days.'}
+            </Text>
+            {settings.fastingRoutine === 'dawud' ? (
+              <View style={styles.dawudAnchorCard}>
+                <Text style={styles.dawudAnchorTitle}>
+                  DAWUD FASTING ANCHOR
+                </Text>
+                <Text style={styles.dawudAnchorHint}>
+                  This date is a fasting day. The cycle alternates every other
+                  day from it.
+                </Text>
+                <View style={styles.dawudAnchorRow}>
+                  <View style={styles.dawudAnchorFieldYear}>
+                    <Text style={styles.dawudAnchorLabel}>YEAR</Text>
+                    <TextInput
+                      value={dawudAnchorYear}
+                      onChangeText={value => {
+                        if (isUnsignedIntegerInput(value)) {
+                          setDawudAnchorYear(value);
+                          setDawudAnchorError(null);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      maxLength={4}
+                      placeholder="2026"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.dawudAnchorInput}
+                      accessibilityLabel="Dawud fasting anchor year"
+                    />
+                  </View>
+                  <View style={styles.dawudAnchorField}>
+                    <Text style={styles.dawudAnchorLabel}>MONTH</Text>
+                    <TextInput
+                      value={dawudAnchorMonth}
+                      onChangeText={value => {
+                        if (isUnsignedIntegerInput(value)) {
+                          setDawudAnchorMonth(value);
+                          setDawudAnchorError(null);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      maxLength={2}
+                      placeholder="08"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.dawudAnchorInput}
+                      accessibilityLabel="Dawud fasting anchor month"
+                    />
+                  </View>
+                  <View style={styles.dawudAnchorField}>
+                    <Text style={styles.dawudAnchorLabel}>DAY</Text>
+                    <TextInput
+                      value={dawudAnchorDay}
+                      onChangeText={value => {
+                        if (isUnsignedIntegerInput(value)) {
+                          setDawudAnchorDay(value);
+                          setDawudAnchorError(null);
+                        }
+                      }}
+                      keyboardType="numeric"
+                      maxLength={2}
+                      placeholder="31"
+                      placeholderTextColor="#8C9A8F"
+                      style={styles.dawudAnchorInput}
+                      accessibilityLabel="Dawud fasting anchor day"
+                    />
+                  </View>
+                </View>
+                <Pressable
+                  style={styles.dawudAnchorSaveButton}
+                  onPress={saveDawudAnchorDate}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save Dawud fasting anchor date"
+                  accessibilityHint="Sets this date as a fasting day and updates fasting alarms."
+                >
+                  <Text style={styles.dawudAnchorSaveText}>
+                    SAVE ANCHOR DATE
+                  </Text>
+                </Pressable>
+                {dawudAnchorError ? (
+                  <Text
+                    style={styles.dawudAnchorError}
+                    accessibilityRole="alert"
+                  >
+                    {dawudAnchorError}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextBlock}>
+                <Text style={styles.toggleTitle}>Fasting alarms</Text>
+                <Text style={styles.toggleDescription}>
+                  Suhoor reminder 30 minutes before Imsak, plus Imsak alarm.
+                </Text>
+              </View>
+              <Switch
+                value={settings.fastingAlarmsEnabled}
+                onValueChange={onFastingAlarms}
+                accessibilityLabel="Fasting alarms"
+                accessibilityHint="Schedules Suhoor and Imsak alerts"
+                accessibilityRole="switch"
+                disabled={
+                  settings.fastingRoutine === 'off' ||
+                  !nativeNotificationsAvailable
+                }
+                trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                thumbColor={COLORS.cream}
+              />
+            </View>
+            {settings.fastingAlarmsEnabled &&
+            settings.fastingRoutine !== 'off' ? (
+              <View style={styles.prayerToggleGroup}>
+                <View style={styles.prayerToggleRow}>
+                  <Text style={styles.prayerToggleLabel}>Suhoor reminder</Text>
+                  <Switch
+                    value={settings.suhoorReminderEnabled}
+                    onValueChange={onSuhoorReminder}
+                    accessibilityLabel="Suhoor reminder"
+                    accessibilityHint="Schedules a reminder before Imsak"
+                    accessibilityRole="switch"
+                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                    thumbColor={COLORS.cream}
+                  />
+                </View>
+                <View style={styles.prayerToggleRow}>
+                  <Text style={styles.prayerToggleLabel}>Imsak alarm</Text>
+                  <Switch
+                    value={settings.imsakAlarmEnabled}
+                    onValueChange={onImsakAlarm}
+                    accessibilityLabel="Imsak alarm"
+                    accessibilityHint="Schedules an alarm at Imsak"
+                    accessibilityRole="switch"
+                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                    thumbColor={COLORS.cream}
+                  />
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextBlock}>
+                <Text style={styles.toggleTitle}>24-hour time</Text>
+                <Text style={styles.toggleDescription}>
+                  Display prayer and calendar times as 05:30 instead of 5:30 AM.
+                </Text>
+              </View>
+              <Switch
+                value={settings.use24HourTime}
+                onValueChange={onUse24HourTime}
+                accessibilityLabel="24-hour time"
+                accessibilityHint="Displays times using the 24-hour clock"
+                accessibilityRole="switch"
+                trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                thumbColor={COLORS.cream}
+              />
+            </View>
+
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextBlock}>
+                <Text style={styles.toggleTitle}>Prayer reminders</Text>
+                <Text style={styles.toggleDescription}>
+                  Native alerts for the next seven days.
+                </Text>
+              </View>
+              <Switch
+                value={settings.notificationsEnabled}
+                onValueChange={onNotifications}
+                disabled={!nativeNotificationsAvailable}
+                accessibilityLabel="Prayer reminders"
+                accessibilityHint="Schedules native prayer alerts"
+                accessibilityRole="switch"
+                trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                thumbColor={COLORS.cream}
+              />
+            </View>
+            {settings.notificationsEnabled ? (
+              <>
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleTextBlock}>
+                    <Text style={styles.toggleTitle}>Adhan sound</Text>
+                    <Text style={styles.toggleDescription}>
+                      Uses a bundled 28-second Adhan clip for prayer alerts.
+                      Fasting alarms keep the system sound.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={settings.adhanEnabled}
+                    onValueChange={onAdhanEnabled}
+                    accessibilityLabel="Adhan sound"
+                    accessibilityHint="Uses Adhan audio for prayer alerts"
+                    accessibilityRole="switch"
+                    trackColor={{ false: COLORS.sand, true: COLORS.moss }}
+                    thumbColor={COLORS.cream}
+                  />
+                </View>
+                <Text style={styles.adhanVolumeLabel}>ADHAN VOLUME ROUTE</Text>
+                <View style={styles.adhanVolumeSelector}>
+                  {(
+                    [
+                      ['alarm', 'Alarm'],
+                      ['media', 'Media'],
+                      ['notification', 'Notification'],
+                    ] as const
+                  ).map(([category, label]) => {
+                    const isSelected =
+                      settings.adhanVolumeCategory === category;
+                    return (
+                      <Pressable
+                        key={category}
+                        style={[
+                          styles.adhanVolumeButton,
+                          isSelected && styles.adhanVolumeButtonSelected,
+                        ]}
+                        onPress={() => onAdhanVolumeCategory(category)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: isSelected }}
+                        accessibilityLabel={`${label} volume route`}
+                      >
+                        <Text
+                          style={[
+                            styles.adhanVolumeButtonText,
+                            isSelected && styles.adhanVolumeButtonTextSelected,
+                          ]}
+                        >
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.adhanVolumeHint}>
+                  Android follows this system volume. iPhone uses its standard
+                  notification audio route.
+                </Text>
+                <View style={styles.adhanPreviewRow}>
+                  <Pressable
+                    style={styles.adhanPreviewButton}
+                    onPress={toggleAdhanPreview}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      isAdhanPreviewPlaying
+                        ? 'Stop full Adhan preview'
+                        : 'Play full Adhan preview'
+                    }
+                  >
+                    <Text style={styles.adhanPreviewText}>
+                      {isAdhanPreviewPlaying
+                        ? 'STOP FULL PREVIEW'
+                        : 'PLAY FULL PREVIEW'}
+                    </Text>
+                  </Pressable>
+                  <Text style={styles.adhanLicenseText}>
+                    CC0 recording · source in Third Party Notices
+                  </Text>
+                </View>
+                {adhanPreviewError ? (
+                  <Text
+                    style={styles.adhanPreviewError}
+                    accessibilityRole="alert"
+                  >
+                    {adhanPreviewError}
+                  </Text>
+                ) : null}
+                <View style={styles.prayerToggleGroup}>
+                  {PRAYER_NAMES.map(prayer => (
+                    <View style={styles.prayerToggleRow} key={prayer}>
+                      <Text style={styles.prayerToggleLabel}>{prayer}</Text>
+                      <Switch
+                        value={settings.enabledPrayers[prayer]}
+                        onValueChange={enabled =>
+                          onPrayerReminder(prayer, enabled)
+                        }
+                        accessibilityLabel={`${prayer} reminder`}
+                        accessibilityHint={`Schedules ${prayer} prayer alerts`}
+                        accessibilityRole="switch"
+                        trackColor={{
+                          false: COLORS.sand,
+                          true: COLORS.moss,
+                        }}
+                        thumbColor={COLORS.cream}
+                      />
+                    </View>
+                  ))}
+                </View>
+              </>
+            ) : null}
+
+            <Text style={styles.settingsLabel}>NOTIFICATION HEALTH</Text>
+            <View style={styles.healthCard} accessibilityLiveRegion="polite">
+              <HealthRow
+                label="Notifications"
+                value={notificationHealthLabel(health.notifications)}
+              />
+              {health.timing !== 'notApplicable' ? (
+                <HealthRow
+                  label="Timing"
+                  value={notificationHealthLabel(health.timing)}
+                />
+              ) : null}
+              {health.batteryOptimization !== 'notApplicable' ? (
+                <HealthRow
+                  label="Battery"
+                  value={notificationHealthLabel(health.batteryOptimization)}
+                />
+              ) : null}
+              {health.bootRescheduling === 'supported' ? (
+                <HealthRow
+                  label="After restart"
+                  value="Reschedules reminders"
+                />
+              ) : null}
+              {!nativeNotificationsAvailable ? (
+                <Text
+                  style={styles.nativeReminderUnavailable}
+                  accessibilityRole="alert"
+                >
+                  Reminders require the latest Duavara app build. Reinstall the
+                  current APK, then reopen these settings to allow
+                  notifications.
+                </Text>
+              ) : null}
+              <Text style={styles.healthHint}>
+                Focus, Do Not Disturb, and system notification settings can
+                still delay alerts.
+              </Text>
+              <View style={styles.healthActions}>
+                <Pressable
+                  style={styles.healthButton}
+                  onPress={onRefreshNotificationHealth}
+                  accessibilityRole="button"
+                  accessibilityLabel="Refresh notification health"
+                >
+                  <Text style={styles.healthButtonText}>REFRESH STATUS</Text>
+                </Pressable>
+                {health.timing === 'approximate' ? (
+                  <Pressable
+                    style={styles.healthButton}
+                    onPress={onOpenExactAlarmSettings}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open exact alarm settings"
+                  >
+                    <Text style={styles.healthButtonText}>
+                      ALLOW EXACT TIME
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {health.batteryOptimization === 'restricted' ? (
+                  <Pressable
+                    style={styles.healthButton}
+                    onPress={onOpenBatterySettings}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open battery optimization settings"
+                  >
+                    <Text style={styles.healthButtonText}>
+                      BATTERY SETTINGS
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {health.notifications === 'blocked' ? (
+                  <Pressable
+                    style={styles.healthButton}
+                    onPress={onOpenSystemSettings}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open system notification settings"
+                  >
+                    <Text style={styles.healthButtonText}>SYSTEM SETTINGS</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+
+            <Text style={styles.settingsLabel}>SAVED PLACE DETAILS</Text>
+            <Text style={styles.settingsHint}>
+              Each place keeps its own coordinates, optional timezone,
+              high-latitude rule, minute adjustments, and 30-day offline
+              timetable.
+            </Text>
+            <TextInput
+              value={profileNameValue}
+              onChangeText={onProfileName}
+              placeholder="Place name, e.g. Home"
+              placeholderTextColor="#8C9A8F"
+              style={styles.profileTextInput}
+              maxLength={40}
+              accessibilityLabel="Saved place name"
+            />
+            <View style={styles.profileOptionRow}>
+              {(
+                [
+                  ['home', 'Home'],
+                  ['work', 'Work'],
+                  ['mosque', 'Mosque'],
+                  ['travel', 'Travel'],
+                  ['custom', 'Custom'],
+                ] as const
+              ).map(([kind, label]) => {
+                const selected = profileKindValue === kind;
+                return (
+                  <Pressable
+                    key={kind}
+                    style={[
+                      styles.profileOption,
+                      selected && styles.profileOptionSelected,
+                    ]}
+                    onPress={() => onProfileKind(kind)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`${label} place type`}
+                  >
+                    <Text
+                      style={[
+                        styles.profileOptionText,
+                        selected && styles.profileOptionTextSelected,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.settingsLabel}>MANUAL COORDINATES</Text>
+            <Text style={styles.settingsHint}>
+              Enter coordinates manually to update this saved place.
+            </Text>
+            <View style={styles.coordinateRow}>
+              <View style={styles.coordinateField}>
+                <Text style={styles.coordinateLabel}>LATITUDE</Text>
+                <TextInput
+                  value={latitude}
+                  onChangeText={value => {
+                    if (isSignedDecimalInput(value)) onLatitude(value);
+                  }}
+                  keyboardType={
+                    Platform.OS === 'android'
+                      ? 'numeric'
+                      : 'numbers-and-punctuation'
+                  }
+                  placeholder="e.g. 51.5074"
+                  placeholderTextColor="#8C9A8F"
+                  style={styles.coordinateInput}
+                  accessibilityLabel="Latitude"
+                />
+              </View>
+              <View style={styles.coordinateField}>
+                <Text style={styles.coordinateLabel}>LONGITUDE</Text>
+                <TextInput
+                  value={longitude}
+                  onChangeText={value => {
+                    if (isSignedDecimalInput(value)) onLongitude(value);
+                  }}
+                  keyboardType={
+                    Platform.OS === 'android'
+                      ? 'numeric'
+                      : 'numbers-and-punctuation'
+                  }
+                  placeholder="e.g. -0.1278"
+                  placeholderTextColor="#8C9A8F"
+                  style={styles.coordinateInput}
+                  accessibilityLabel="Longitude"
+                />
+              </View>
+            </View>
+            <Text style={styles.coordinateLabel}>
+              TIMEZONE OVERRIDE (OPTIONAL)
+            </Text>
+            <TextInput
+              value={timezoneValue}
+              onChangeText={onTimezone}
+              autoCapitalize="none"
+              placeholder="e.g. Europe/London"
+              placeholderTextColor="#8C9A8F"
+              style={styles.profileTextInput}
+              accessibilityLabel="IANA timezone override"
+            />
+            <Text style={styles.settingsLabel}>LOCAL MINUTE ADJUSTMENTS</Text>
+            <Text style={styles.settingsHint}>
+              Use only when your local masjid timetable differs. Set 0 to keep
+              the API time.
+            </Text>
+            <View style={styles.adjustmentRow}>
+              {PRAYER_NAMES.map(prayer => (
+                <View key={prayer} style={styles.adjustmentField}>
+                  <Text style={styles.adjustmentLabel}>{prayer}</Text>
+                  <TextInput
+                    value={profileAdjustments[prayer]}
+                    onChangeText={value => {
+                      if (isSignedIntegerInput(value))
+                        onAdjustment(prayer, value);
+                    }}
+                    keyboardType={
+                      Platform.OS === 'android'
+                        ? 'numeric'
+                        : 'numbers-and-punctuation'
+                    }
+                    style={styles.adjustmentInput}
+                    accessibilityLabel={`${prayer} minute adjustment`}
+                  />
+                </View>
+              ))}
+            </View>
+            <Pressable
+              style={[
+                styles.saveLocationButton,
+                isBusy && styles.saveLocationButtonDisabled,
+              ]}
+              onPress={onSaveLocation}
+              disabled={isBusy}
+              accessibilityRole="button"
+              accessibilityLabel="Save place and update prayer times"
+            >
+              <Text style={styles.saveLocationText}>
+                {isBusy
+                  ? 'UPDATING…'
+                  : 'SAVE MANUAL COORDINATES & UPDATE TIMES'}
+              </Text>
+            </Pressable>
+
+            <Text style={styles.settingsLabel}>PRIVACY</Text>
+            <Text style={styles.settingsHint}>
+              Delete all locally stored app data, including saved places, prayer
+              caches, worship progress, Quran downloads, mosque notes, Zakat
+              data, and scheduled reminders.
+            </Text>
+            <Pressable
+              style={styles.deleteDataButton}
+              onPress={onDeleteAllData}
+              disabled={isBusy}
+              accessibilityRole="button"
+              accessibilityLabel="Delete all local data"
+            >
+              <Text style={styles.deleteDataButtonText}>
+                DELETE ALL LOCAL DATA
+              </Text>
+            </Pressable>
+          </ScrollView>
+        </>
+      )}
+    </MotionSheet>
   );
 }
 
@@ -4013,9 +4349,11 @@ function AboutView({
         </View>
       </View>
 
-      <SupportDuavaraCard
-        onPress={() => onOpenExternalUrl(SUPPORT_DUAVARA_LINK.url)}
-      />
+      <Reveal delay={60}>
+        <SupportDuavaraCard
+          onPress={() => onOpenExternalUrl(SUPPORT_DUAVARA_LINK.url)}
+        />
+      </Reveal>
 
       <Text style={styles.aboutSectionLabel}>APP & PRIVACY</Text>
       {ABOUT_LINKS.slice(0, 4).map(link => (
@@ -4062,7 +4400,7 @@ function SupportDuavaraCard({ onPress }: { onPress: () => Promise<void> }) {
       <Text style={styles.aboutSupportDescription}>
         A one-time coffee helps sustain thoughtful, privacy-first worship tools.
       </Text>
-      <Pressable
+      <PressableScale
         style={styles.aboutSupportButton}
         onPress={onPress}
         accessibilityRole="button"
@@ -4074,7 +4412,7 @@ function SupportDuavaraCard({ onPress }: { onPress: () => Promise<void> }) {
           <Text style={styles.aboutSupportButtonDetail}>BUY ME A COFFEE</Text>
         </View>
         <Text style={styles.aboutSupportButtonArrow}>↗</Text>
-      </Pressable>
+      </PressableScale>
     </View>
   );
 }
@@ -4118,47 +4456,53 @@ function HealthRow({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   app: { flex: 1, backgroundColor: COLORS.ink },
-  scrollContent: { paddingHorizontal: 20 },
+  appBar: {
+    paddingHorizontal: 20,
+    paddingTop: 6,
+    paddingBottom: 14,
+    backgroundColor: COLORS.ink,
+  },
+  scrollContent: { paddingHorizontal: 20, paddingTop: 8 },
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 12,
-    marginBottom: 26,
   },
   headerIdentity: { flex: 1, flexShrink: 1 },
   wordmark: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 30,
-    letterSpacing: -0.8,
-    lineHeight: 36,
+    fontFamily: FONTS.display,
+    fontSize: 27,
+    letterSpacing: -0.7,
+    lineHeight: 32,
   },
   locationPill: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     flexShrink: 1,
-    gap: 6,
+    gap: 7,
     marginTop: 3,
+    minHeight: 24,
   },
-  locationDot: { color: COLORS.mint, fontSize: 10 },
   locationText: {
     color: COLORS.muted,
     flexShrink: 1,
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '600',
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
   },
-  headerActions: { flexDirection: 'row', flexShrink: 0, gap: 8 },
+  headerActions: { flexDirection: 'row', flexShrink: 0, gap: 10 },
   headerRefreshButton: {
     alignItems: 'center',
     backgroundColor: COLORS.inkSoft,
     borderColor: COLORS.line,
-    borderRadius: 21,
+    borderRadius: 22,
     borderWidth: 1,
-    height: 42,
+    height: 44,
     justifyContent: 'center',
-    width: 42,
+    width: 44,
   },
   locationPinIcon: {
     alignItems: 'center',
@@ -4177,139 +4521,171 @@ const styles = StyleSheet.create({
     width: 6,
   },
   settingsButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.inkSoft,
     borderWidth: 1,
     borderColor: COLORS.line,
   },
-  settingsGlyph: {
-    color: COLORS.cream,
-    fontSize: 20,
-    transform: [{ rotate: '90deg' }],
+  slidersGlyph: { width: 17, gap: 4, alignItems: 'flex-start' },
+  sliderLine: {
+    height: 1.8,
+    borderRadius: 1,
+    backgroundColor: COLORS.cream,
   },
+  sliderLineWide: { width: 15 },
+  sliderLineMid: { width: 12 },
+  sliderLineShort: { width: 9 },
   messageBanner: {
-    backgroundColor: 'rgba(234, 203, 125, 0.16)',
+    backgroundColor: 'rgba(217, 183, 107, 0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(234, 203, 125, 0.35)',
-    borderRadius: 15,
+    borderColor: 'rgba(217, 183, 107, 0.32)',
+    borderRadius: 16,
     paddingHorizontal: 14,
-    paddingVertical: 11,
+    paddingVertical: 12,
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 10,
-    marginBottom: 18,
+    marginBottom: 16,
   },
   messageText: {
     color: COLORS.parchment,
     flex: 1,
-    fontSize: 12,
+    fontSize: 12.5,
     lineHeight: 18,
   },
-  messageDismiss: { color: COLORS.gold, fontSize: 20, lineHeight: 18 },
-  dateBlock: { marginBottom: 16 },
+  messageDismiss: { color: COLORS.gold, fontSize: 20, lineHeight: 20 },
+  dateBlock: { marginBottom: 18 },
   dateEyebrow: {
     color: COLORS.gold,
-    fontSize: 12,
+    fontSize: 10.5,
     fontWeight: '800',
-    letterSpacing: 1.25,
+    letterSpacing: 1.6,
     textTransform: 'uppercase',
   },
   dateTitle: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 27,
+    fontFamily: FONTS.display,
+    fontSize: 28,
     lineHeight: 34,
-    letterSpacing: -0.45,
-    marginTop: 4,
+    letterSpacing: -0.5,
+    marginTop: 6,
   },
   nextCard: {
-    backgroundColor: COLORS.moss,
-    borderRadius: 30,
-    padding: 25,
-    minHeight: 258,
+    backgroundColor: COLORS.mossDeep,
+    borderRadius: 28,
+    padding: 22,
+    minHeight: 210,
     overflow: 'hidden',
-    marginBottom: 29,
+    marginBottom: 24,
     borderWidth: 1,
-    borderColor: 'rgba(199, 240, 218, 0.18)',
+    borderColor: 'rgba(203, 243, 224, 0.14)',
+  },
+  heroGlow: {
+    position: 'absolute',
+    top: -140,
+    right: -110,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: 'rgba(143, 217, 190, 0.08)',
+  },
+  heroOrbitOuter: {
+    position: 'absolute',
+    top: -62,
+    right: -56,
+    width: 210,
+    height: 210,
+    borderRadius: 105,
+    borderWidth: 1,
+    borderColor: 'rgba(217, 183, 107, 0.22)',
+  },
+  heroOrbitInner: {
+    position: 'absolute',
+    top: -26,
+    right: -22,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 1,
+    borderColor: 'rgba(203, 243, 224, 0.12)',
   },
   moon: {
     position: 'absolute',
-    top: -48,
-    right: -31,
-    width: 170,
-    height: 170,
-    borderRadius: 85,
+    top: -54,
+    right: -42,
+    width: 148,
+    height: 148,
+    borderRadius: 74,
     backgroundColor: COLORS.gold,
-    opacity: 0.95,
+    opacity: 0.18,
   },
   moonCutout: {
     position: 'absolute',
-    width: 158,
-    height: 158,
-    borderRadius: 79,
-    backgroundColor: COLORS.moss,
-    top: -12,
-    left: -49,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: COLORS.mossDeep,
+    top: -10,
+    left: -46,
   },
-  starOne: {
-    position: 'absolute',
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: COLORS.cream,
-    top: 60,
-    left: 24,
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  starTwo: {
-    position: 'absolute',
-    width: 3,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: COLORS.cream,
-    top: 83,
-    left: 41,
-  },
+  heroKickerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   nextEyebrow: {
     color: COLORS.mintBright,
-    fontSize: 11,
-    letterSpacing: 1.6,
+    fontSize: 10.5,
+    letterSpacing: 1.7,
     fontWeight: '800',
   },
+  heroNameRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 14,
+    marginTop: 16,
+    marginBottom: 20,
+  },
+  heroNameBlock: { flex: 1, minWidth: 0 },
   nextName: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 48,
+    fontFamily: FONTS.display,
+    fontSize: 44,
     letterSpacing: -1.2,
-    lineHeight: 56,
-    marginTop: 9,
+    lineHeight: 50,
   },
   nextArabic: {
-    color: COLORS.mintBright,
-    fontSize: 19,
-    lineHeight: 25,
+    color: 'rgba(203, 243, 224, 0.72)',
+    fontSize: 17,
+    lineHeight: 24,
     textAlign: 'left',
-  },
-  nextTimeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginTop: 25,
+    marginTop: 4,
   },
   nextTime: {
     color: COLORS.cream,
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
-    letterSpacing: -0.5,
+    letterSpacing: -0.4,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'right',
   },
   countdownPill: {
-    backgroundColor: 'rgba(5, 24, 22, 0.32)',
-    borderRadius: 12,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    alignItems: 'flex-end',
+    backgroundColor: 'rgba(3, 12, 10, 0.42)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(203, 243, 224, 0.16)',
   },
   countdownLabel: {
     color: COLORS.mint,
@@ -4320,23 +4696,41 @@ const styles = StyleSheet.create({
   countdownValue: {
     color: COLORS.cream,
     fontVariant: ['tabular-nums'],
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '700',
-    marginTop: 1,
   },
-  nextHint: { color: 'rgba(255, 248, 232, 0.70)', fontSize: 12, marginTop: 16 },
+  nextHint: {
+    color: 'rgba(250, 245, 233, 0.66)',
+    fontSize: 12.5,
+    marginTop: 14,
+  },
   fastingStatusCard: {
-    backgroundColor: 'rgba(234, 203, 125, 0.09)',
-    borderColor: 'rgba(234, 203, 125, 0.28)',
-    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    backgroundColor: 'rgba(217, 183, 107, 0.08)',
+    borderColor: 'rgba(217, 183, 107, 0.24)',
+    borderRadius: 20,
     borderWidth: 1,
-    marginBottom: 20,
-    padding: 17,
+    marginBottom: 22,
+    padding: 16,
   },
   fastingStatusCardActive: {
-    backgroundColor: 'rgba(145, 214, 190, 0.12)',
-    borderColor: 'rgba(145, 214, 190, 0.42)',
+    backgroundColor: 'rgba(143, 217, 190, 0.10)',
+    borderColor: 'rgba(143, 217, 190, 0.36)',
   },
+  fastingBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(217, 183, 107, 0.14)',
+  },
+  fastingBadgeActive: { backgroundColor: 'rgba(143, 217, 190, 0.18)' },
+  fastingBadgeGlyph: { color: COLORS.gold, fontSize: 20 },
+  fastingBadgeGlyphActive: { color: COLORS.mintBright },
+  fastingBody: { flex: 1 },
   fastingStatusKicker: {
     color: COLORS.gold,
     fontSize: 10,
@@ -4345,15 +4739,15 @@ const styles = StyleSheet.create({
   },
   fastingStatusTitle: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 22,
-    marginTop: 5,
+    fontFamily: FONTS.display,
+    fontSize: 21,
+    marginTop: 4,
   },
   fastingStatusText: {
     color: COLORS.mint,
-    fontSize: 12,
+    fontSize: 12.5,
     lineHeight: 18,
-    marginTop: 5,
+    marginTop: 4,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -4363,64 +4757,72 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 21,
+    fontFamily: FONTS.display,
+    fontSize: 22,
     letterSpacing: -0.3,
   },
   sectionMeta: {
     color: COLORS.muted,
     fontSize: 11,
-    maxWidth: 120,
+    maxWidth: 140,
     textAlign: 'right',
   },
   prayerList: {
     backgroundColor: COLORS.inkSoft,
-    borderRadius: 22,
+    borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: COLORS.line,
   },
   prayerRow: {
-    minHeight: 76,
+    minHeight: 74,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: COLORS.line,
   },
-  prayerRowNext: { backgroundColor: COLORS.cream, borderBottomWidth: 0 },
+  prayerRowNext: {
+    backgroundColor: 'rgba(143, 217, 190, 0.10)',
+    borderBottomWidth: 0,
+  },
   prayerIcon: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(145, 214, 190, 0.12)',
+    backgroundColor: 'rgba(250, 245, 233, 0.05)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 14,
   },
-  prayerIconNext: { backgroundColor: COLORS.moss },
-  prayerIconText: { color: COLORS.mint, fontSize: 19 },
-  prayerIconTextNext: { color: COLORS.cream },
-  prayerNameBlock: { flex: 1 },
-  prayerNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  prayerName: { color: COLORS.cream, fontSize: 16, fontWeight: '700' },
-  prayerNameNext: { color: COLORS.ink },
-  prayerArabic: { color: COLORS.muted, fontSize: 13, marginTop: 2 },
+  prayerIconNext: { backgroundColor: COLORS.mint },
+  prayerIconPast: { opacity: 0.6 },
+  prayerIconText: { color: COLORS.sand, fontSize: 17 },
+  prayerIconTextNext: { color: COLORS.inkDeep },
+  prayerIconTextPast: { color: COLORS.muted },
+  prayerNameBlock: { flex: 1, marginRight: 10 },
+  prayerNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  prayerName: { color: COLORS.cream, fontSize: 16.5, fontWeight: '700' },
+  prayerNameNext: { color: COLORS.mintBright },
+  prayerNamePast: { color: 'rgba(250, 245, 233, 0.68)' },
+  prayerArabic: { color: COLORS.muted, fontSize: 12.5, marginTop: 2 },
   prayerTime: {
     color: COLORS.cream,
     fontSize: 15,
     fontVariant: ['tabular-nums'],
     fontWeight: '700',
+    letterSpacing: 0.1,
   },
-  prayerTimeNext: { color: COLORS.ink },
+  prayerTimeNext: { color: COLORS.mintBright },
+  prayerTimePast: { color: 'rgba(250, 245, 233, 0.58)' },
   nowBadge: {
-    color: COLORS.mint,
+    color: COLORS.gold,
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0.8,
   },
   nextBadge: {
-    color: COLORS.moss,
+    color: COLORS.mintBright,
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0.8,
@@ -4454,62 +4856,117 @@ const styles = StyleSheet.create({
   footnoteText: { color: COLORS.muted, fontSize: 11, lineHeight: 17, flex: 1 },
   loadingState: {
     flex: 1,
-    minHeight: 350,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 14,
+    paddingTop: 8,
+    gap: 18,
   },
-  loadingStateCompact: { minHeight: 150 },
-  loadingText: { color: COLORS.muted, fontSize: 13 },
-  emptyState: { alignItems: 'center', paddingTop: 50, paddingHorizontal: 18 },
+  loadingCompact: { gap: 10, paddingVertical: 18 },
+  loadingHero: {
+    backgroundColor: COLORS.mossDeep,
+    borderColor: 'rgba(203, 243, 224, 0.14)',
+    borderRadius: 28,
+    borderWidth: 1,
+    padding: 22,
+    minHeight: 190,
+  },
+  loadingGap: { marginTop: 18 },
+  loadingGapSm: { marginTop: 8 },
+  loadingGapLg: { marginTop: 22 },
+  loadingListCard: {
+    backgroundColor: COLORS.inkSoft,
+    borderColor: COLORS.line,
+    borderRadius: 24,
+    borderWidth: 1,
+    paddingVertical: 4,
+  },
+  loadingRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 14,
+    minHeight: 66,
+    paddingHorizontal: 16,
+  },
+  loadingRowText: { flex: 1 },
+  loadingText: {
+    color: COLORS.muted,
+    fontSize: 12.5,
+    textAlign: 'center',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingTop: 24,
+    paddingHorizontal: 12,
+  },
+  emptySky: {
+    width: '100%',
+    height: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  emptyStar: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: COLORS.cream,
+  },
+  emptyOrbit: {
+    position: 'absolute',
+    width: 218,
+    height: 218,
+    borderRadius: 109,
+    borderWidth: 1,
+    borderColor: 'rgba(203, 243, 224, 0.12)',
+  },
   emptyMoon: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     backgroundColor: COLORS.gold,
-    marginBottom: 27,
     overflow: 'hidden',
   },
   emptyMoonCutout: {
-    width: 106,
-    height: 106,
-    borderRadius: 53,
+    width: 92,
+    height: 92,
+    borderRadius: 46,
     backgroundColor: COLORS.ink,
     position: 'absolute',
-    top: -13,
-    left: -28,
+    top: -11,
+    left: -25,
   },
   emptyKicker: {
     color: COLORS.gold,
-    letterSpacing: 1.4,
-    fontSize: 11,
+    letterSpacing: 1.6,
+    fontSize: 10.5,
     fontWeight: '800',
   },
   emptyTitle: {
     color: COLORS.cream,
     textAlign: 'center',
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 34,
-    lineHeight: 41,
+    fontFamily: FONTS.display,
+    fontSize: 33,
+    lineHeight: 40,
     letterSpacing: -0.8,
-    marginTop: 8,
+    marginTop: 10,
   },
   emptyText: {
     color: COLORS.muted,
     textAlign: 'center',
     lineHeight: 21,
     fontSize: 14,
-    marginTop: 16,
-    marginBottom: 27,
+    marginTop: 14,
+    marginBottom: 26,
+    maxWidth: 330,
   },
   primaryButton: {
     backgroundColor: COLORS.cream,
     alignSelf: 'stretch',
-    borderRadius: 15,
+    borderRadius: 999,
     minHeight: 54,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  primaryButtonWide: { paddingHorizontal: 28 },
   primaryButtonText: {
     color: COLORS.ink,
     fontSize: 12,
@@ -4518,10 +4975,10 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     alignSelf: 'stretch',
-    minHeight: 54,
+    minHeight: 50,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 6,
   },
   secondaryButtonText: {
     color: COLORS.mintBright,
@@ -4532,47 +4989,171 @@ const styles = StyleSheet.create({
   tabBar: {
     position: 'absolute',
     bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    backgroundColor: 'rgba(5, 24, 22, 0.97)',
-    borderTopWidth: 1,
+    left: 12,
+    right: 12,
+    backgroundColor: 'rgba(14, 35, 29, 0.98)',
+    borderWidth: 1,
     borderColor: COLORS.line,
-    paddingTop: 10,
-    paddingHorizontal: 8,
-    justifyContent: 'space-around',
+    borderRadius: 26,
+    paddingTop: 8,
+    paddingHorizontal: 6,
+    ...SHADOW.floating,
   },
-  tabItem: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: 3 },
-  tabIcon: { color: '#759187', fontSize: 20, lineHeight: 23 },
-  tabIconActive: { color: COLORS.gold },
-  tabLabel: { color: '#759187', fontSize: 10, fontWeight: '700' },
-  tabLabelActive: { color: COLORS.cream },
+  tabBarInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  tabIndicator: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    borderRadius: 18,
+    backgroundColor: COLORS.mint,
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    minHeight: 50,
+  },
+  tabLabel: { color: '#8CA69C', fontSize: 9.5, fontWeight: '700' },
+  tabLabelActive: { color: COLORS.inkDeep },
+  tabGlyph: {
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glyphSun: {
+    width: 14,
+    height: 7,
+    borderTopLeftRadius: 7,
+    borderTopRightRadius: 7,
+    borderWidth: 1.6,
+    borderBottomWidth: 0,
+    marginTop: 3,
+  },
+  glyphHorizon: { width: 16, height: 1.6, borderRadius: 1, marginTop: 2 },
+  glyphFrame: {
+    width: 15,
+    height: 13,
+    borderWidth: 1.6,
+    borderRadius: 3.5,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: 2.5,
+  },
+  glyphFrameDot: { width: 4, height: 4, borderRadius: 1 },
+  glyphFrameTick: {
+    position: 'absolute',
+    top: 2,
+    width: 6,
+    height: 1.4,
+    borderRadius: 1,
+  },
+  glyphCompass: {
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    borderWidth: 1.6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glyphCompassNeedle: { width: 3, height: 6, borderRadius: 1.5 },
+  glyphCompassTop: {
+    position: 'absolute',
+    top: -1,
+    width: 3,
+    height: 4,
+    borderRadius: 1.5,
+  },
+  glyphDiamond: {
+    width: 10,
+    height: 10,
+    borderRadius: 1.5,
+    transform: [{ rotate: '45deg' }],
+  },
+  glyphDiamondDot: {
+    position: 'absolute',
+    top: 1,
+    width: 2.4,
+    height: 2.4,
+    borderRadius: 1.2,
+  },
+  glyphInfoRing: {
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    borderWidth: 1.6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1.5,
+  },
+  glyphInfoDot: { width: 2.4, height: 2.4, borderRadius: 1.2 },
+  glyphInfoStem: { width: 2, height: 4, borderRadius: 1 },
   viewHeading: { marginBottom: 24 },
   viewKicker: {
     color: COLORS.gold,
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '900',
-    letterSpacing: 1.4,
+    letterSpacing: 1.6,
   },
   viewTitle: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
+    fontFamily: FONTS.display,
     fontSize: 32,
-    letterSpacing: -0.7,
-    lineHeight: 40,
-    marginTop: 4,
+    letterSpacing: -0.8,
+    lineHeight: 39,
+    marginTop: 6,
   },
   viewDescription: {
     color: COLORS.muted,
-    fontSize: 13,
+    fontSize: 13.5,
     lineHeight: 20,
-    marginTop: 6,
+    marginTop: 8,
     maxWidth: 340,
   },
+  calendarCard: {
+    backgroundColor: COLORS.inkSoft,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: COLORS.line,
+    overflow: 'hidden',
+  },
+  calendarCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+  },
+  calendarCardTitle: {
+    color: COLORS.cream,
+    fontFamily: FONTS.display,
+    fontSize: 20,
+    letterSpacing: -0.3,
+  },
+  calendarCardMeta: { color: COLORS.muted, fontSize: 11 },
   calendarHeader: {
     flexDirection: 'row',
-    paddingHorizontal: 10,
+    alignItems: 'center',
+    paddingHorizontal: 12,
     paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: COLORS.line,
+  },
+  calendarHeaderCell: {
+    flex: 1,
+    color: COLORS.muted,
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textAlign: 'center',
   },
   calendarHeaderText: {
     color: COLORS.muted,
@@ -4580,43 +5161,47 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.8,
   },
-  calendarList: {
-    borderWidth: 1,
-    borderColor: COLORS.line,
-    backgroundColor: COLORS.inkSoft,
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
+  calendarList: { backgroundColor: COLORS.inkSoft },
   calendarRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 59,
-    paddingHorizontal: 10,
+    minHeight: 52,
+    paddingHorizontal: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: COLORS.line,
   },
-  calendarRowToday: { backgroundColor: COLORS.moss },
-  calendarRowPressed: { backgroundColor: 'rgba(145, 214, 190, 0.16)' },
-  calendarCellDate: { width: '30%' },
+  calendarRowLast: { borderBottomWidth: 0 },
+  calendarRowToday: { backgroundColor: 'rgba(143, 217, 190, 0.10)' },
+  calendarRowPressed: { backgroundColor: 'rgba(143, 217, 190, 0.16)' },
+  calendarDateCell: { flex: 1.2, textAlign: 'left' },
+  calendarDateColumn: { flexDirection: 'column', justifyContent: 'center' },
+  calendarCell: { flex: 1, alignItems: 'center' },
   calendarCellTime: {
-    width: '23.33%',
     color: COLORS.cream,
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '700',
+    letterSpacing: -0.2,
     fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },
+  calendarCellMeridiem: {
+    color: COLORS.muted,
+    fontSize: 7.5,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    marginTop: 1,
+  },
   calendarDay: {
     color: COLORS.cream,
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
-    lineHeight: 20,
+    lineHeight: 19,
   },
   calendarWeekday: {
     color: COLORS.muted,
-    fontSize: 9,
-    letterSpacing: 0.65,
-    marginTop: 2,
+    fontSize: 8.5,
+    letterSpacing: 0.6,
+    marginTop: 1,
   },
   calendarTodayText: { color: COLORS.mintBright },
   calendarDetailSheet: {
@@ -4632,7 +5217,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingTop: 17,
     paddingBottom: 18,
+    gap: 12,
   },
+  calendarDetailHeading: { flexShrink: 1 },
   calendarDetailTitle: {
     color: COLORS.ink,
     fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
@@ -4664,6 +5251,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     minHeight: 58,
   },
+  calendarDetailPrayerNames: { flexShrink: 1 },
   calendarDetailPrayerName: {
     color: COLORS.ink,
     fontSize: 16,
@@ -4702,28 +5290,97 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     overflow: 'hidden',
   },
+  qiblaCardAligned: {
+    borderColor: 'rgba(203, 243, 224, 0.38)',
+    backgroundColor: 'rgba(143, 217, 190, 0.06)',
+  },
   compass: {
-    width: 246,
-    height: 246,
-    borderRadius: 123,
+    width: 250,
+    height: 250,
+    borderRadius: 125,
     borderWidth: 1,
-    borderColor: 'rgba(234, 203, 125, 0.45)',
+    borderColor: 'rgba(217, 183, 107, 0.35)',
     backgroundColor: COLORS.ink,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 22,
+    marginBottom: 18,
+  },
+  compassAligned: { borderColor: 'rgba(203, 243, 224, 0.55)' },
+  compassTickLayer: {
+    position: 'absolute',
+    width: 250,
+    height: 250,
+    alignItems: 'center',
+    paddingTop: 10,
+  },
+  compassTick: {
+    width: 1.5,
+    height: 5,
+    borderRadius: 1,
+    backgroundColor: 'rgba(250, 245, 233, 0.22)',
+  },
+  compassTickMajor: {
+    height: 9,
+    backgroundColor: 'rgba(217, 183, 107, 0.55)',
+  },
+  compassCardinalNorth: {
+    position: 'absolute',
+    top: 30,
+    left: '50%',
+    marginLeft: -5,
+    color: COLORS.gold,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  compassCardinalEast: {
+    position: 'absolute',
+    right: 30,
+    top: '50%',
+    marginTop: -7,
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  compassCardinalSouth: {
+    position: 'absolute',
+    bottom: 30,
+    left: '50%',
+    marginLeft: -5,
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  compassCardinalWest: {
+    position: 'absolute',
+    left: 30,
+    top: '50%',
+    marginTop: -7,
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  compassPhoneForwardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(3, 12, 10, 0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(203, 243, 224, 0.14)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    marginBottom: 10,
   },
   compassPhoneForward: {
     color: COLORS.mintBright,
-    fontSize: 9,
+    fontSize: 8.5,
     fontWeight: '900',
-    letterSpacing: 0.8,
-    position: 'absolute',
-    top: 17,
+    letterSpacing: 1,
   },
   qiblaNeedle: {
     width: 22,
-    height: 178,
+    height: 176,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4732,16 +5389,17 @@ const styles = StyleSheet.create({
     top: 0,
     width: 0,
     height: 0,
-    borderLeftWidth: 11,
-    borderRightWidth: 11,
-    borderBottomWidth: 80,
+    borderLeftWidth: 10,
+    borderRightWidth: 10,
+    borderBottomWidth: 88,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
     borderBottomColor: COLORS.gold,
   },
+  qiblaNeedleTipAligned: { borderBottomColor: COLORS.mintBright },
   qiblaTargetImage: {
     position: 'absolute',
-    top: 34,
+    top: 30,
     left: '50%',
     marginLeft: -23,
     width: 46,
@@ -4753,12 +5411,12 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: 0,
     height: 0,
-    borderLeftWidth: 8,
-    borderRightWidth: 8,
-    borderTopWidth: 66,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderTopWidth: 62,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
-    borderTopColor: COLORS.moss,
+    borderTopColor: 'rgba(250, 245, 233, 0.28)',
   },
   compassCenter: {
     position: 'absolute',
@@ -4769,26 +5427,26 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: COLORS.ink,
   },
+  qiblaReadoutRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
   qiblaNumber: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 49,
-    lineHeight: 58,
+    fontFamily: FONTS.display,
+    fontSize: 46,
+    lineHeight: 54,
     letterSpacing: -1.5,
   },
   qiblaLabel: {
     color: COLORS.gold,
     fontWeight: '900',
-    fontSize: 10,
+    fontSize: 9.5,
     letterSpacing: 1.1,
     textAlign: 'center',
-    marginTop: 1,
-  },
-  qiblaRule: {
-    width: 48,
-    height: 1,
-    backgroundColor: COLORS.line,
-    marginVertical: 18,
   },
   qiblaInstruction: {
     color: COLORS.muted,
@@ -4796,42 +5454,52 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     textAlign: 'center',
     maxWidth: 280,
+    marginTop: 12,
+  },
+  qiblaStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    justifyContent: 'center',
   },
   qiblaLiveStatus: {
     color: COLORS.mint,
     fontSize: 9,
     fontWeight: '800',
     letterSpacing: 0.65,
-    marginTop: 11,
     textAlign: 'center',
+    flexShrink: 1,
   },
   qiblaActions: {
     flexDirection: 'row',
-    gap: 9,
-    marginTop: 20,
+    gap: 10,
+    marginTop: 22,
   },
   qiblaCameraButton: {
     backgroundColor: COLORS.cream,
-    borderRadius: 12,
-    paddingHorizontal: 15,
-    paddingVertical: 11,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    minHeight: 46,
+    justifyContent: 'center',
   },
   qiblaCameraButtonText: {
     color: COLORS.ink,
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '900',
     letterSpacing: 0.8,
   },
   qiblaRefresh: {
     borderWidth: 1,
-    borderColor: 'rgba(145, 214, 190, 0.45)',
-    borderRadius: 12,
-    paddingHorizontal: 17,
-    paddingVertical: 11,
+    borderColor: 'rgba(143, 217, 190, 0.4)',
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    minHeight: 46,
+    justifyContent: 'center',
   },
   qiblaRefreshText: {
     color: COLORS.mintBright,
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '900',
     letterSpacing: 0.9,
   },
@@ -4840,44 +5508,44 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 15,
     textAlign: 'center',
-    marginTop: 12,
+    marginTop: 14,
   },
   occasionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: COLORS.gold,
-    minHeight: 159,
-    padding: 21,
-    borderRadius: 22,
+    minHeight: 150,
+    padding: 20,
+    borderRadius: 24,
     marginBottom: 12,
     overflow: 'hidden',
   },
+  occasionBody: { flex: 1, paddingRight: 12 },
   occasionLabel: {
-    color: COLORS.inkSoft,
+    color: 'rgba(8, 18, 15, 0.72)',
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1.1,
   },
   occasionTitle: {
-    color: COLORS.ink,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 29,
-    lineHeight: 35,
-    letterSpacing: -0.7,
+    color: COLORS.inkDeep,
+    fontFamily: FONTS.display,
+    fontSize: 27,
+    lineHeight: 33,
+    letterSpacing: -0.6,
     marginTop: 8,
-    maxWidth: '78%',
   },
   occasionDate: {
-    color: COLORS.inkSoft,
-    fontSize: 13,
+    color: 'rgba(8, 18, 15, 0.68)',
+    fontSize: 12.5,
     fontWeight: '600',
-    marginTop: 3,
+    marginTop: 4,
   },
   occasionMark: {
-    position: 'absolute',
-    right: 18,
-    bottom: 6,
-    color: COLORS.cream,
-    opacity: 0.65,
-    fontSize: 72,
+    color: 'rgba(8, 18, 15, 0.32)',
+    fontSize: 64,
+    marginLeft: 8,
   },
   nameCard: {
     backgroundColor: COLORS.moss,
@@ -5016,12 +5684,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 9,
   },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.54)',
-    justifyContent: 'flex-end',
-  },
-  modalDismissArea: { flex: 1 },
   settingsSheet: {
     maxHeight: '86%',
     backgroundColor: COLORS.parchment,
@@ -5218,73 +5880,63 @@ const styles = StyleSheet.create({
     letterSpacing: 0.15,
   },
   aboutSupportCard: {
-    backgroundColor: COLORS.inkSoft,
-    borderColor: COLORS.gold,
-    borderRadius: 18,
-    borderWidth: 2,
-    marginTop: 12,
-    overflow: 'hidden',
-    padding: 15,
-    shadowColor: COLORS.gold,
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.16,
-    shadowRadius: 13,
-    elevation: 4,
+    backgroundColor: 'rgba(217, 183, 107, 0.09)',
+    borderColor: 'rgba(217, 183, 107, 0.32)',
+    borderRadius: 22,
+    borderWidth: 1,
+    marginTop: 16,
+    padding: 18,
   },
-  aboutSupportHeader: { alignItems: 'center', flexDirection: 'row', gap: 11 },
+  aboutSupportHeader: { alignItems: 'center', flexDirection: 'row', gap: 12 },
   aboutSupportMark: {
     alignItems: 'center',
     backgroundColor: COLORS.gold,
-    borderColor: COLORS.cream,
-    borderRadius: 18,
-    borderWidth: 1,
-    height: 36,
+    borderRadius: 19,
+    height: 38,
     justifyContent: 'center',
-    width: 36,
+    width: 38,
   },
   aboutSupportMarkText: {
-    color: COLORS.ink,
-    fontSize: 17,
-    lineHeight: 20,
+    color: COLORS.inkDeep,
+    fontSize: 18,
+    lineHeight: 21,
   },
   aboutSupportCopy: { flex: 1 },
   aboutSupportKicker: {
     color: COLORS.gold,
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '900',
-    letterSpacing: 1.05,
+    letterSpacing: 1.3,
   },
   aboutSupportTitle: {
     color: COLORS.cream,
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif' }),
-    fontSize: 19,
-    letterSpacing: -0.2,
-    marginTop: 2,
+    fontFamily: FONTS.display,
+    fontSize: 20,
+    letterSpacing: -0.3,
+    marginTop: 3,
   },
   aboutSupportDescription: {
     color: COLORS.mintBright,
-    fontSize: 12,
+    fontSize: 12.5,
     lineHeight: 18,
     marginTop: 12,
   },
   aboutSupportButton: {
     alignItems: 'center',
     backgroundColor: COLORS.cream,
-    borderColor: COLORS.gold,
-    borderRadius: 12,
-    borderWidth: 1,
+    borderRadius: 999,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 14,
-    minHeight: 56,
-    paddingHorizontal: 15,
+    marginTop: 16,
+    minHeight: 58,
+    paddingHorizontal: 20,
   },
   aboutSupportButtonCopy: { flex: 1 },
   aboutSupportButtonText: {
-    color: COLORS.ink,
-    fontSize: 13,
+    color: COLORS.inkDeep,
+    fontSize: 12.5,
     fontWeight: '900',
-    letterSpacing: 1.15,
+    letterSpacing: 1.2,
   },
   aboutSupportButtonDetail: {
     color: COLORS.moss,
@@ -5294,10 +5946,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   aboutSupportButtonArrow: {
-    color: COLORS.ink,
-    fontSize: 23,
+    color: COLORS.inkDeep,
+    fontSize: 22,
     fontWeight: '900',
-    lineHeight: 25,
   },
   aboutSectionLabel: {
     color: COLORS.mint,

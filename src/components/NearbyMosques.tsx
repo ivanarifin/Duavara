@@ -1,3 +1,4 @@
+import { COLORS as T, FONTS as T_FONTS } from '@/ui/theme';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -28,16 +29,16 @@ import {
 const MANUAL_SEARCH_COOLDOWN_MS = 30_000;
 
 const COLORS = {
-  ink: '#08201E',
-  inkSoft: '#10332F',
-  inkDeep: '#051816',
-  moss: '#1F5147',
-  mint: '#91D6BE',
-  mintBright: '#C7F0DA',
-  cream: '#FFF8E8',
-  parchment: '#F6EEDC',
-  gold: '#EACB7D',
-  coral: '#EF967C',
+  ink: T.ink,
+  inkSoft: T.inkSoft,
+  inkDeep: T.inkDeep,
+  moss: T.moss,
+  mint: T.mint,
+  mintBright: T.mintBright,
+  cream: T.cream,
+  parchment: T.parchment,
+  gold: T.gold,
+  coral: T.coral,
 };
 
 type NearbyMosquesProps = {
@@ -626,8 +627,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: COLORS.cream,
+    fontFamily: T_FONTS.display,
     fontSize: 24,
-    fontWeight: '800',
     letterSpacing: -0.4,
   },
   description: {
